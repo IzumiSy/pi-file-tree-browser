@@ -1,13 +1,7 @@
 import path from "node:path";
 
 import { type Theme } from "@earendil-works/pi-coding-agent";
-import {
-  Box,
-  Container,
-  matchesKey,
-  Text,
-  type TUI,
-} from "@earendil-works/pi-tui";
+import { Box, matchesKey, Text, type TUI } from "@earendil-works/pi-tui";
 
 import { type FileRepository, fit, type PreviewData } from "./file-repository";
 
@@ -34,6 +28,7 @@ export class FileTreeModel {
   rows: TreeRow[] = [];
   selected = 0;
   scroll = 0;
+  version = 0;
   readonly expandedPaths = new Set<string>();
 
   constructor(
@@ -50,13 +45,17 @@ export class FileTreeModel {
   }
 
   move(delta: number): void {
-    this.selected = Math.max(0, Math.min(this.rows.length - 1, this.selected + delta));
+    const next = Math.max(0, Math.min(this.rows.length - 1, this.selected + delta));
+    if (next === this.selected) return;
+    this.selected = next;
+    this.version += 1;
   }
 
   reload(selectedPath = this.currentRow()?.fullPath ?? this.treeRoot): void {
     this.rows = buildTreeRows(this.treeRoot, this.expandedPaths, this.files);
     this.selected = findRowIndex(this.rows, selectedPath);
     this.scroll = Math.min(this.scroll, Math.max(0, this.rows.length - 1));
+    this.version += 1;
   }
 
   expandSelected(onReroot: () => void): void {
@@ -102,7 +101,10 @@ export class FileTreeModel {
       (candidate) => candidate.fullPath === parentPath,
     );
     if (parentIndex !== -1) {
-      this.selected = parentIndex;
+      if (this.selected !== parentIndex) {
+        this.selected = parentIndex;
+        this.version += 1;
+      }
       return;
     }
 
@@ -115,12 +117,28 @@ export class FileTreeModel {
   }
 
   keepSelectionVisible(bodyHeight: number): void {
+    const previous = this.scroll;
     if (this.selected < this.scroll) this.scroll = this.selected;
     if (this.selected >= this.scroll + bodyHeight) {
       this.scroll = this.selected - bodyHeight + 1;
     }
     this.scroll = Math.max(0, this.scroll);
+    if (this.scroll !== previous) this.version += 1;
   }
+}
+
+type RenderCache = {
+  key: string;
+  lines: string[];
+};
+
+function getCachedLines(
+  cache: RenderCache | undefined,
+  key: string,
+  build: () => string[],
+): RenderCache {
+  if (cache?.key === key) return cache;
+  return { key, lines: build() };
 }
 
 export class PreviewModel {
@@ -175,6 +193,9 @@ export class PreviewModel {
 export class FileViewerOverlay {
   private readonly tree: FileTreeModel;
   private readonly preview: PreviewModel;
+  private headerCache: RenderCache | undefined;
+  private footerCache: RenderCache | undefined;
+  private treePanelCache: RenderCache | undefined;
 
   constructor(
     cwd: string,
@@ -307,37 +328,11 @@ export class FileViewerOverlay {
 
     const paddingX = width > 2 ? 1 : 0;
     const contentWidth = Math.max(1, width - paddingX * 2);
-    const root = new Container();
-
-    root.addChild(
-      this.boxFromLines(
-        [this.theme.fg("muted", ` ${this.tree.treeRoot}`)],
-        paddingX,
-        contentWidth,
-        "selectedBg",
-      ),
-    );
+    const lines = [...this.renderHeader(width, paddingX, contentWidth)];
 
     if (!this.preview.isOpen()) {
-      const visibleRows = this.tree.rows.slice(
-        this.tree.scroll,
-        this.tree.scroll + Math.max(1, bodyRows),
-      );
-
       if (width < 24) {
-        root.addChild(
-          this.boxFromLines(
-            Array.from({ length: Math.max(1, bodyRows) }, (_, index) =>
-              this.renderTreeLine(
-                visibleRows[index],
-                contentWidth,
-                this.tree.scroll + index === this.tree.selected,
-              ),
-            ),
-            paddingX,
-            contentWidth,
-          ),
-        );
+        lines.push(...this.renderTreePanel(contentWidth, bodyRows, paddingX));
       } else {
         const gutterWidth = 1;
         const leftWidth = Math.max(
@@ -345,93 +340,32 @@ export class FileViewerOverlay {
           Math.floor((contentWidth - gutterWidth) * 0.15),
         );
         const rightWidth = Math.max(10, contentWidth - gutterWidth - leftWidth);
-        const leftLines = this.boxFromLines(
-          Array.from({ length: Math.max(1, bodyRows) }, (_, index) =>
-            this.renderTreeLine(
-              visibleRows[index],
-              leftWidth,
-              this.tree.scroll + index === this.tree.selected,
-            ),
-          ),
-          0,
-          leftWidth,
-        ).render(leftWidth);
+        const leftLines = this.renderTreePanel(leftWidth, bodyRows, 0);
         const rightLines = Array.from({ length: leftLines.length }, () =>
           " ".repeat(rightWidth),
         );
-
-        root.addChild(
-          new Text(this.joinColumns(leftLines, rightLines, gutterWidth), 0, 0),
-        );
+        lines.push(...this.joinColumns(leftLines, rightLines, gutterWidth));
       }
     } else if (width < 24) {
-      const visibleRows = this.tree.rows.slice(
-        this.tree.scroll,
-        this.tree.scroll + Math.max(1, bodyRows - 5),
-      );
-      root.addChild(
-        this.boxFromLines(
-          Array.from({ length: Math.max(1, bodyRows - 5) }, (_, index) =>
-            this.renderTreeLine(
-              visibleRows[index],
-              contentWidth,
-              this.tree.scroll + index === this.tree.selected,
-            ),
-          ),
-          paddingX,
-          contentWidth,
-        ),
-      );
-      root.addChild(
-        new Text(this.renderPreviewPanel(contentWidth, 5).join("\n"), paddingX, 0),
-      );
+      lines.push(...this.renderTreePanel(contentWidth, Math.max(1, bodyRows - 5), paddingX));
+      lines.push(...this.renderPreviewPanel(contentWidth, 5));
     } else {
-      const visibleRows = this.tree.rows.slice(
-        this.tree.scroll,
-        this.tree.scroll + Math.max(1, bodyRows),
-      );
       const gutterWidth = 1;
-      const leftWidth = Math.max(
-        10,
-        Math.floor((contentWidth - gutterWidth) * 0.15),
-      );
+      const leftWidth = Math.max(10, Math.floor((contentWidth - gutterWidth) * 0.15));
       const rightWidth = Math.max(10, contentWidth - gutterWidth - leftWidth);
-      const leftLines = this.boxFromLines(
-        Array.from({ length: Math.max(1, bodyRows) }, (_, index) =>
-          this.renderTreeLine(
-            visibleRows[index],
-            leftWidth,
-            this.tree.scroll + index === this.tree.selected,
-          ),
-        ),
-        0,
-        leftWidth,
-      ).render(leftWidth);
+      const leftLines = this.renderTreePanel(leftWidth, bodyRows, 0);
       const rightLines = this.renderPreviewPanel(rightWidth, bodyRows);
-
-      root.addChild(
-        new Text(this.joinColumns(leftLines, rightLines, gutterWidth), 0, 0),
-      );
+      lines.push(...this.joinColumns(leftLines, rightLines, gutterWidth));
     }
 
-    root.addChild(
-      this.boxFromLines(
-        [
-          this.theme.fg(
-            "text",
-            " ↑↓: move  •  j/k: move or preview scroll  •  Ctrl+U/D: preview page scroll  •  s: pin/unpin next-turn ctx  •  h/l/q/Esc: close preview or fold/unfold  •  Enter: preview, then edit  •  r: reload  •  Ctrl+C: close ",
-          ),
-        ],
-        paddingX,
-        contentWidth,
-        "customMessageBg",
-      ),
-    );
-
-    return root.render(width);
+    lines.push(...this.renderFooter(width, paddingX, contentWidth));
+    return lines;
   }
 
   invalidate(): void {
+    this.headerCache = undefined;
+    this.footerCache = undefined;
+    this.treePanelCache = undefined;
     this.preview.invalidate();
   }
 
@@ -497,6 +431,67 @@ export class FileViewerOverlay {
     return this.theme.bg(selected ? FILE_SELECTION_BG : FILE_TREE_BG, line);
   }
 
+  private renderHeader(width: number, paddingX: number, contentWidth: number): string[] {
+    const key = `${width}:${paddingX}:${contentWidth}:${this.tree.treeRoot}`;
+    this.headerCache = getCachedLines(this.headerCache, key, () =>
+      this.boxFromLines(
+        [this.theme.fg("muted", ` ${this.tree.treeRoot}`)],
+        paddingX,
+        contentWidth,
+        "selectedBg",
+      ).render(width),
+    );
+    return this.headerCache.lines;
+  }
+
+  private renderFooter(width: number, paddingX: number, contentWidth: number): string[] {
+    const key = `${width}:${paddingX}:${contentWidth}`;
+    this.footerCache = getCachedLines(this.footerCache, key, () =>
+      this.boxFromLines(
+        [
+          this.theme.fg(
+            "text",
+            " ↑↓: move  •  j/k: move or preview scroll  •  Ctrl+U/D: preview page scroll  •  s: pin/unpin next-turn ctx  •  h/l/q/Esc: close preview or fold/unfold  •  Enter: preview, then edit  •  r: reload  •  Ctrl+C: close ",
+          ),
+        ],
+        paddingX,
+        contentWidth,
+        "customMessageBg",
+      ).render(width),
+    );
+    return this.footerCache.lines;
+  }
+
+  private renderTreePanel(width: number, height: number, paddingX: number): string[] {
+    const key = [
+      width,
+      height,
+      paddingX,
+      this.tree.version,
+      this.tree.scroll,
+      this.tree.selected,
+      this.chatContextPath ?? "",
+    ].join(":");
+    this.treePanelCache = getCachedLines(this.treePanelCache, key, () => {
+      const visibleRows = this.tree.rows.slice(
+        this.tree.scroll,
+        this.tree.scroll + Math.max(1, height),
+      );
+      return this.boxFromLines(
+        Array.from({ length: Math.max(1, height) }, (_, index) =>
+          this.renderTreeLine(
+            visibleRows[index],
+            width,
+            this.tree.scroll + index === this.tree.selected,
+          ),
+        ),
+        paddingX,
+        width,
+      ).render(width + paddingX * 2);
+    });
+    return this.treePanelCache.lines;
+  }
+
   private renderPreviewPanel(width: number, height: number): string[] {
     const bodyHeight = Math.max(1, height);
     this.preview.previewPageStep = Math.max(1, Math.floor(bodyHeight / 2));
@@ -513,7 +508,7 @@ export class FileViewerOverlay {
     left: string[],
     right: string[],
     gutterWidth: number,
-  ): string {
+  ): string[] {
     const lines: string[] = [];
     const gutter = " ".repeat(gutterWidth);
     const count = Math.max(left.length, right.length);
@@ -522,7 +517,7 @@ export class FileViewerOverlay {
       lines.push(`${left[index] ?? ""}${gutter}${right[index] ?? ""}`);
     }
 
-    return lines.join("\n");
+    return lines;
   }
 }
 
