@@ -6,6 +6,7 @@ import {
   PreviewModel,
 } from "../extensions/file-browser";
 import {
+  buildPinManagerItems,
   buildPinnedFileContextText,
   readSessionContextPath,
 } from "../extensions/main";
@@ -385,5 +386,27 @@ describe("session file pin helpers", () => {
 
     expect(text).toContain("- next turn: a.ts");
     expect(text).toContain("- next turn: b.ts");
+  });
+
+  it("builds pin manager items for direct removal", () => {
+    expect(
+      buildPinManagerItems("/root", "/root/session.ts", ["/root/a.ts", "/root/b.ts"]),
+    ).toEqual([
+      {
+        value: "next-turn:/root/a.ts",
+        label: "a.ts",
+        description: "Enter to remove",
+      },
+      {
+        value: "next-turn:/root/b.ts",
+        label: "b.ts",
+        description: "Enter to remove",
+      },
+      {
+        value: "session:/root/session.ts",
+        label: "session.ts",
+        description: "Enter to remove",
+      },
+    ]);
   });
 });

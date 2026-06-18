@@ -1,7 +1,15 @@
 import {
+  DynamicBorder,
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import {
+  Container,
+  matchesKey,
+  type SelectItem,
+  SelectList,
+  Text,
+} from "@earendil-works/pi-tui";
 
 import { FileViewerOverlay, type FileViewerResult } from "./file-browser";
 import { FileRepository, fit } from "./file-repository";
@@ -20,6 +28,10 @@ type SessionEntryLike = {
   customType?: string;
   data?: unknown;
 };
+
+type PinManagerAction =
+  | { kind: "remove-next-turn"; fullPath: string }
+  | { kind: "remove-session"; fullPath: string };
 
 export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
@@ -98,6 +110,48 @@ export default function (pi: ExtensionAPI) {
       }
     },
   });
+
+  pi.registerCommand("pins", {
+    description: "Manage pinned file context",
+    handler: async (_args, ctx) => {
+      if (ctx.mode !== "tui") {
+        ctx.ui.notify("/pins is only available in TUI mode", "error");
+        return;
+      }
+
+      if (!sessionChatContextPath && pendingChatContextPaths.length === 0) {
+        ctx.ui.notify("No pinned files", "info");
+        return;
+      }
+
+      while (sessionChatContextPath || pendingChatContextPaths.length > 0) {
+        const action = await showPinManagerDialog(ctx);
+        if (!action) return;
+
+        switch (action.kind) {
+          case "remove-next-turn":
+            pendingChatContextPaths = pendingChatContextPaths.filter(
+              (fullPath) => fullPath !== action.fullPath,
+            );
+            updateChatContextWidget(ctx, sessionChatContextPath, pendingChatContextPaths);
+            ctx.ui.notify(
+              `Unpinned next-turn file: ${files.displayPath(action.fullPath, ctx.cwd)}`,
+              "info",
+            );
+            break;
+          case "remove-session":
+            sessionChatContextPath = undefined;
+            pi.appendEntry(SESSION_CONTEXT_ENTRY, { fullPath: undefined });
+            updateChatContextWidget(ctx, sessionChatContextPath, pendingChatContextPaths);
+            ctx.ui.notify(
+              `Cleared session pin: ${files.displayPath(action.fullPath, ctx.cwd)}`,
+              "info",
+            );
+            break;
+        }
+      }
+    },
+  });
 }
 
 export function readSessionContextPath(
@@ -142,6 +196,96 @@ export function buildPinnedFileContextText(
     "Treat these pinned files as high-priority context for this conversation. When relevant, read them before answering questions or making changes.",
     ...lines,
   ].join("\n");
+}
+
+export function buildPinManagerItems(
+  cwd: string,
+  sessionPath: string | undefined,
+  nextTurnPaths: ReadonlyArray<string>,
+): SelectItem[] {
+  const items: SelectItem[] = [];
+
+  for (const fullPath of nextTurnPaths) {
+    items.push({
+      value: `next-turn:${fullPath}`,
+      label: files.displayPath(fullPath, cwd),
+      description: "Enter to remove",
+    });
+  }
+
+  if (sessionPath) {
+    items.push({
+      value: `session:${sessionPath}`,
+      label: files.displayPath(sessionPath, cwd),
+      description: "Enter to remove",
+    });
+  }
+
+  return items;
+}
+
+function parsePinManagerAction(value: string): PinManagerAction | undefined {
+  if (value.startsWith("next-turn:")) {
+    return { kind: "remove-next-turn", fullPath: value.slice("next-turn:".length) };
+  }
+
+  if (value.startsWith("session:")) {
+    return { kind: "remove-session", fullPath: value.slice("session:".length) };
+  }
+
+  return undefined;
+}
+
+async function showPinManagerDialog(
+  ctx: ExtensionContext,
+): Promise<PinManagerAction | undefined> {
+  const items = buildPinManagerItems(
+    ctx.cwd,
+    sessionChatContextPath,
+    pendingChatContextPaths,
+  );
+
+  if (items.length === 0) return undefined;
+
+  const result = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+    const container = new Container();
+    container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
+    container.addChild(new Text(theme.fg("accent", theme.bold("Remove pinned file")), 1, 0));
+
+    const selectList = new SelectList(items, Math.min(items.length, 8), {
+      selectedPrefix: (text) => theme.fg("accent", text),
+      selectedText: (text) => theme.fg("accent", text),
+      description: (text) => theme.fg("muted", text),
+      scrollInfo: (text) => theme.fg("dim", text),
+      noMatch: (text) => theme.fg("warning", text),
+    });
+
+    selectList.onSelect = (item) => done(item.value);
+    selectList.onCancel = () => done(null);
+
+    container.addChild(selectList);
+    container.addChild(new Text(theme.fg("dim", "↑↓ navigate • enter remove • esc/q cancel"), 1, 0));
+    container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
+
+    return {
+      render(width: number) {
+        return container.render(width);
+      },
+      invalidate() {
+        container.invalidate();
+      },
+      handleInput(data: string) {
+        if (matchesKey(data, "q")) {
+          done(null);
+          return;
+        }
+        selectList.handleInput(data);
+        tui.requestRender();
+      },
+    };
+  });
+
+  return result ? parsePinManagerAction(result) : undefined;
 }
 
 function updateChatContextWidget(
@@ -214,4 +358,3 @@ async function openFileEditor(
 function fitWidgetLine(width: number, text: string): string {
   return fit(width, text);
 }
-
