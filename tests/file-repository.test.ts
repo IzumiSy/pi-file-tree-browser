@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -88,6 +89,27 @@ describe("FileRepository", () => {
       expect(preview.renderedWindow).toMatchObject({ start: 61, end: 144 });
       expect(highlightedChunks).toHaveLength(2);
       expect(highlightedChunks[1]?.split("\n")).toHaveLength(21);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("lists git-tracked files", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "pi-files-"));
+
+    try {
+      writeFileSync(path.join(root, "tracked.ts"), "export const tracked = true;\n");
+      mkdirSync(path.join(root, "src"));
+      writeFileSync(path.join(root, "src", "nested.ts"), "export const nested = true;\n");
+
+      expect(spawnSync("git", ["init"], { cwd: root }).status).toBe(0);
+      expect(spawnSync("git", ["add", "."], { cwd: root }).status).toBe(0);
+
+      const repo = new FileRepository();
+      expect(repo.listTrackedFiles(root).map((file) => file.relativePath)).toEqual([
+        "src/nested.ts",
+        "tracked.ts",
+      ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

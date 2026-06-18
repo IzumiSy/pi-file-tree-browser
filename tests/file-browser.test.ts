@@ -1,11 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { FileTreeModel, PreviewModel } from "../extensions/file-browser";
-import type { PreviewData, TreeEntry } from "../extensions/file-repository";
+import {
+  FileSearchModel,
+  FileTreeModel,
+  PreviewModel,
+} from "../extensions/file-browser";
+import type {
+  PreviewData,
+  TrackedFile,
+  TreeEntry,
+} from "../extensions/file-repository";
 
 class FakeFileRepository {
   constructor(
     private readonly entries: Record<string, TreeEntry[]>,
     private readonly previews: Record<string, PreviewData> = {},
+    private readonly trackedFiles: TrackedFile[] = [],
   ) {}
 
   listEntries(dir: string): TreeEntry[] {
@@ -37,6 +46,10 @@ class FakeFileRepository {
     return { kind: "text", text: "" };
   }
 
+  listTrackedFiles(): TrackedFile[] {
+    return this.trackedFiles;
+  }
+
   writeText(): void {}
 
   displayPath(fullPath: string): string {
@@ -49,6 +62,16 @@ function entry(fullPath: string, isDirectory: boolean): TreeEntry {
     name: fullPath.split("/").at(-1) ?? fullPath,
     fullPath,
     isDirectory,
+  };
+}
+
+function tracked(relativePath: string): TrackedFile {
+  return {
+    fullPath: `/root/${relativePath}`,
+    relativePath,
+    baseName: relativePath.split("/").at(-1) ?? relativePath,
+    normalizedPath: relativePath.toLowerCase(),
+    normalizedBaseName: (relativePath.split("/").at(-1) ?? relativePath).toLowerCase(),
   };
 }
 
@@ -123,6 +146,57 @@ describe("FileTreeModel", () => {
     tree.move(-3);
     tree.keepSelectionVisible(2);
     expect(tree.scroll).toBe(0);
+  });
+});
+
+describe("FileSearchModel", () => {
+  it("filters git-tracked files incrementally and prefers basename matches", () => {
+    const files = new FakeFileRepository(
+      {},
+      {},
+      [
+        tracked("src/file-browser.ts"),
+        tracked("tests/file-browser.test.ts"),
+        tracked("README.md"),
+      ],
+    );
+
+    const search = new FileSearchModel("/root", files);
+
+    search.open();
+    expect(search.results.map((result) => result.relativePath)).toEqual([
+      "README.md",
+      "src/file-browser.ts",
+      "tests/file-browser.test.ts",
+    ]);
+
+    search.insert("file-b");
+    expect(search.results.map((result) => result.relativePath)).toEqual([
+      "src/file-browser.ts",
+      "tests/file-browser.test.ts",
+    ]);
+
+    search.insert("r");
+    expect(search.currentResult()?.relativePath).toBe("src/file-browser.ts");
+  });
+
+  it("keeps the search selection visible while scrolling", () => {
+    const files = new FakeFileRepository(
+      {},
+      {},
+      [tracked("a.ts"), tracked("b.ts"), tracked("c.ts"), tracked("d.ts")],
+    );
+
+    const search = new FileSearchModel("/root", files);
+    search.open();
+
+    search.move(3);
+    search.keepSelectionVisible(2);
+    expect(search.scroll).toBe(2);
+
+    search.move(-3);
+    search.keepSelectionVisible(2);
+    expect(search.scroll).toBe(0);
   });
 });
 

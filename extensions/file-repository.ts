@@ -1,4 +1,5 @@
 import { strict as assert } from "node:assert";
+import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -24,10 +25,20 @@ export type PreviewData = {
   };
 };
 
+export type TrackedFile = {
+  fullPath: string;
+  relativePath: string;
+  baseName: string;
+  normalizedPath: string;
+  normalizedBaseName: string;
+};
+
 const PREVIEW_HIGHLIGHT_BUFFER_LINES = 40;
 const PREVIEW_HIGHLIGHT_CONTEXT_LINES = 20;
 
 export class FileRepository {
+  private readonly trackedFilesCache = new Map<string, TrackedFile[]>();
+
   constructor(
     private readonly renderHighlighted: (code: string, language?: string) => string[] =
       highlightCode,
@@ -166,6 +177,15 @@ export class FileRepository {
     return { kind: "text", text: buffer.toString("utf8") };
   }
 
+  listTrackedFiles(cwd: string, refresh = false): TrackedFile[] {
+    const cached = this.trackedFilesCache.get(cwd);
+    if (cached && !refresh) return cached;
+
+    const files = this.readTrackedFiles(cwd);
+    this.trackedFilesCache.set(cwd, files);
+    return files;
+  }
+
   writeText(fullPath: string, text: string): void {
     writeFileSync(fullPath, text, "utf8");
   }
@@ -181,6 +201,25 @@ export class FileRepository {
     }
 
     return fullPath;
+  }
+
+  private readTrackedFiles(cwd: string): TrackedFile[] {
+    const result = spawnSync("git", ["ls-files", "-z"], {
+      cwd,
+      encoding: "utf8",
+    });
+    if (result.status !== 0 || typeof result.stdout !== "string") return [];
+
+    return result.stdout
+      .split("\0")
+      .filter((relativePath): relativePath is string => relativePath.length > 0)
+      .map((relativePath) => ({
+        fullPath: path.join(cwd, relativePath),
+        relativePath,
+        baseName: path.basename(relativePath),
+        normalizedPath: relativePath.toLowerCase(),
+        normalizedBaseName: path.basename(relativePath).toLowerCase(),
+      }));
   }
 }
 

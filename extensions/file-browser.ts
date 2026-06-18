@@ -3,7 +3,12 @@ import path from "node:path";
 import { type Theme } from "@earendil-works/pi-coding-agent";
 import { Box, matchesKey, Text, type TUI } from "@earendil-works/pi-tui";
 
-import { type FileRepository, fit, type PreviewData } from "./file-repository";
+import {
+  type FileRepository,
+  fit,
+  type PreviewData,
+  type TrackedFile,
+} from "./file-repository";
 
 type FileRepositoryLike = Pick<
   FileRepository,
@@ -11,6 +16,7 @@ type FileRepositoryLike = Pick<
   | "readPreview"
   | "renderPreviewLines"
   | "readEditableText"
+  | "listTrackedFiles"
   | "writeText"
   | "displayPath"
 >;
@@ -23,7 +29,14 @@ export type TreeRow = {
   isExpanded: boolean;
 };
 
+export type SearchHit = {
+  fullPath: string;
+  relativePath: string;
+  score: number;
+};
+
 type BgColor = "selectedBg" | "customMessageBg" | "toolPendingBg";
+type ViewerMode = "tree" | "search";
 
 export type FileViewerResult =
   | { kind: "close" }
@@ -137,6 +150,102 @@ export class FileTreeModel {
   }
 }
 
+export class FileSearchModel {
+  query = "";
+  results: SearchHit[] = [];
+  selected = 0;
+  scroll = 0;
+  version = 0;
+  active = false;
+  private trackedFiles: TrackedFile[] = [];
+
+  constructor(
+    private readonly cwd: string,
+    private readonly files: FileRepositoryLike,
+  ) {}
+
+  currentResult(): SearchHit | undefined {
+    return this.results[this.selected];
+  }
+
+  open(): void {
+    this.active = true;
+    this.query = "";
+    this.selected = 0;
+    this.scroll = 0;
+    this.refresh();
+  }
+
+  close(): boolean {
+    if (!this.active) return false;
+    this.active = false;
+    this.query = "";
+    this.results = [];
+    this.selected = 0;
+    this.scroll = 0;
+    this.version += 1;
+    return true;
+  }
+
+  refresh(force = false): void {
+    this.trackedFiles = this.files.listTrackedFiles(this.cwd, force);
+    this.recompute();
+  }
+
+  move(delta: number): void {
+    const next = Math.max(0, Math.min(this.results.length - 1, this.selected + delta));
+    if (next === this.selected) return;
+    this.selected = next;
+    this.version += 1;
+  }
+
+  insert(text: string): void {
+    this.query += text;
+    this.recompute();
+  }
+
+  backspace(): void {
+    if (this.query.length === 0) return;
+    this.query = this.query.slice(0, -1);
+    this.recompute();
+  }
+
+  keepSelectionVisible(bodyHeight: number): void {
+    const previous = this.scroll;
+    if (this.selected < this.scroll) this.scroll = this.selected;
+    if (this.selected >= this.scroll + bodyHeight) {
+      this.scroll = this.selected - bodyHeight + 1;
+    }
+    this.scroll = Math.max(0, this.scroll);
+    if (this.scroll !== previous) this.version += 1;
+  }
+
+  private recompute(selectedPath = this.currentResult()?.fullPath): void {
+    const query = this.query.trim().toLowerCase();
+    this.results = this.trackedFiles
+      .map((file) => {
+        const score = scoreTrackedFile(file, query);
+        if (score === undefined) return undefined;
+        return {
+          fullPath: file.fullPath,
+          relativePath: file.relativePath,
+          score,
+        } satisfies SearchHit;
+      })
+      .filter((hit): hit is SearchHit => !!hit)
+      .sort(
+        (a, b) =>
+          b.score - a.score ||
+          a.relativePath.length - b.relativePath.length ||
+          a.relativePath.localeCompare(b.relativePath),
+      );
+
+    this.selected = findSearchIndex(this.results, selectedPath);
+    this.scroll = Math.min(this.scroll, Math.max(0, this.results.length - 1));
+    this.version += 1;
+  }
+}
+
 type RenderCache = {
   key: string;
   lines: string[];
@@ -220,26 +329,32 @@ type PreviewViewportCache = {
 
 export class FileViewerOverlay {
   private readonly tree: FileTreeModel;
+  private readonly search: FileSearchModel;
   private readonly preview: PreviewModel;
+  private mode: ViewerMode = "tree";
   private headerCache: RenderCache | undefined;
   private footerCache: RenderCache | undefined;
   private treePanelCache: RenderCache | undefined;
+  private searchPanelCache: RenderCache | undefined;
   private previewPanelCache: PreviewViewportCache | undefined;
 
   constructor(
-    cwd: string,
+    private readonly cwd: string,
     private readonly tui: TUI,
     private readonly theme: Theme,
-    files: FileRepositoryLike,
+    private readonly files: FileRepositoryLike,
     private chatContextPath: string | undefined,
     private readonly commitChatContextPath: (fullPath: string | undefined) => void,
     private readonly done: (result: FileViewerResult) => void,
   ) {
     this.tree = new FileTreeModel(cwd, files);
+    this.search = new FileSearchModel(cwd, files);
     this.preview = new PreviewModel(files);
   }
 
   handleInput(data: string): void {
+    if (this.mode === "search" && this.handleSearchInput(data)) return;
+
     if (matchesKey(data, "ctrl+c")) {
       this.finish();
       return;
@@ -251,6 +366,12 @@ export class FileViewerOverlay {
         return;
       }
       this.finish();
+      return;
+    }
+
+    if (data === "/") {
+      this.openSearch();
+      this.tui.requestRender();
       return;
     }
 
@@ -353,26 +474,31 @@ export class FileViewerOverlay {
     const terminalHeight = Math.max(1, this.tui.terminal.rows);
     const bodyRows = Math.max(1, terminalHeight - 3);
 
-    this.tree.keepSelectionVisible(bodyRows);
+    if (this.mode === "search") {
+      this.search.keepSelectionVisible(bodyRows);
+    } else {
+      this.tree.keepSelectionVisible(bodyRows);
+    }
 
     const paddingX = width > 2 ? 1 : 0;
     const contentWidth = Math.max(1, width - paddingX * 2);
     const lines = [...this.renderHeader(width, paddingX, contentWidth)];
+
+    if (this.mode === "search") {
+      lines.push(...this.renderSearchPanel(contentWidth, bodyRows, paddingX));
+      lines.push(...this.renderFooter(width, paddingX, contentWidth));
+      return lines;
+    }
 
     if (!this.preview.isOpen()) {
       if (width < 24) {
         lines.push(...this.renderTreePanel(contentWidth, bodyRows, paddingX));
       } else {
         const gutterWidth = 1;
-        const leftWidth = Math.max(
-          10,
-          Math.floor((contentWidth - gutterWidth) * 0.15),
-        );
+        const leftWidth = this.leftPanelWidth(contentWidth, gutterWidth);
         const rightWidth = Math.max(10, contentWidth - gutterWidth - leftWidth);
         const leftLines = this.renderTreePanel(leftWidth, bodyRows, 0);
-        const rightLines = Array.from({ length: leftLines.length }, () =>
-          " ".repeat(rightWidth),
-        );
+        const rightLines = Array.from({ length: leftLines.length }, () => " ".repeat(rightWidth));
         lines.push(...this.joinColumns(leftLines, rightLines, gutterWidth));
       }
     } else if (width < 24) {
@@ -380,7 +506,7 @@ export class FileViewerOverlay {
       lines.push(...this.renderPreviewPanel(contentWidth, 5));
     } else {
       const gutterWidth = 1;
-      const leftWidth = Math.max(10, Math.floor((contentWidth - gutterWidth) * 0.15));
+      const leftWidth = this.leftPanelWidth(contentWidth, gutterWidth);
       const rightWidth = Math.max(10, contentWidth - gutterWidth - leftWidth);
       const leftLines = this.renderTreePanel(leftWidth, bodyRows, 0);
       const rightLines = this.renderPreviewPanel(rightWidth, bodyRows);
@@ -395,6 +521,7 @@ export class FileViewerOverlay {
     this.headerCache = undefined;
     this.footerCache = undefined;
     this.treePanelCache = undefined;
+    this.searchPanelCache = undefined;
     this.previewPanelCache = undefined;
     this.preview.invalidate();
   }
@@ -404,6 +531,76 @@ export class FileViewerOverlay {
   private finish(result: FileViewerResult = { kind: "close" }): void {
     this.commitChatContextPath(this.chatContextPath);
     this.done(result);
+  }
+
+  private handleSearchInput(data: string): boolean {
+    if (matchesKey(data, "ctrl+c") || matchesKey(data, "escape")) {
+      this.closeSearch();
+      this.tui.requestRender();
+      return true;
+    }
+
+    if (matchesKey(data, "up")) {
+      this.search.move(-1);
+      this.tui.requestRender();
+      return true;
+    }
+
+    if (matchesKey(data, "down")) {
+      this.search.move(1);
+      this.tui.requestRender();
+      return true;
+    }
+
+    if (matchesKey(data, "enter")) {
+      this.closeSearch(this.search.currentResult()?.fullPath);
+      this.tui.requestRender();
+      return true;
+    }
+
+    if (matchesKey(data, "backspace")) {
+      this.search.backspace();
+      this.tui.requestRender();
+      return true;
+    }
+
+    if (isPrintableInput(data)) {
+      this.search.insert(data);
+      this.tui.requestRender();
+      return true;
+    }
+
+    return false;
+  }
+
+  private openSearch(): void {
+    this.mode = "search";
+    this.search.open();
+    this.preview.close();
+  }
+
+  private closeSearch(revealPath?: string): void {
+    this.search.close();
+    this.mode = "tree";
+    this.preview.close();
+    if (!revealPath) return;
+    this.revealInTree(revealPath);
+    this.preview.open(revealPath);
+  }
+
+  private revealInTree(fullPath: string): void {
+    if (!isWithin(fullPath, this.tree.treeRoot)) {
+      this.tree.treeRoot = this.cwd;
+    }
+
+    let current = path.dirname(fullPath);
+    while (isWithin(current, this.cwd) && current !== path.dirname(current)) {
+      this.tree.expandedPaths.add(current);
+      if (current === this.tree.treeRoot) break;
+      current = path.dirname(current);
+    }
+
+    this.tree.reload(fullPath);
   }
 
   private openSelected(): void {
@@ -424,11 +621,18 @@ export class FileViewerOverlay {
   }
 
   private toggleSelectedContextPath(): void {
-    const row = this.tree.currentRow();
-    if (!row || row.isDirectory || row.fullPath.endsWith("#more")) return;
+    const fullPath = this.selectedFilePath();
+    if (!fullPath) return;
 
-    this.chatContextPath =
-      this.chatContextPath === row.fullPath ? undefined : row.fullPath;
+    this.chatContextPath = this.chatContextPath === fullPath ? undefined : fullPath;
+  }
+
+  private selectedFilePath(): string | undefined {
+    if (this.mode === "search") return this.search.currentResult()?.fullPath;
+
+    const row = this.tree.currentRow();
+    if (!row || row.isDirectory || row.fullPath.endsWith("#more")) return undefined;
+    return row.fullPath;
   }
 
   private boxFromLines(
@@ -461,11 +665,27 @@ export class FileViewerOverlay {
     return this.theme.bg(selected ? FILE_SELECTION_BG : FILE_TREE_BG, line);
   }
 
+  private renderSearchLine(
+    hit: SearchHit | undefined,
+    width: number,
+    selected: boolean,
+  ): string {
+    if (!hit) return this.theme.bg(FILE_TREE_BG, " ".repeat(width));
+    const marker =
+      this.chatContextPath === hit.fullPath ? this.theme.fg("warning", " ●") : "";
+    const content = `${hit.relativePath}${marker}`;
+    const line = fit(width, selected ? this.theme.bold(content) : content);
+    return this.theme.bg(selected ? FILE_SELECTION_BG : FILE_TREE_BG, line);
+  }
+
   private renderHeader(width: number, paddingX: number, contentWidth: number): string[] {
-    const key = `${width}:${paddingX}:${contentWidth}:${this.tree.treeRoot}`;
+    const text = this.mode === "search"
+      ? ` / ${this.search.query || ""} (${this.search.results.length})`
+      : ` ${this.tree.treeRoot}`;
+    const key = `${width}:${paddingX}:${contentWidth}:${this.mode}:${text}`;
     this.headerCache = getCachedLines(this.headerCache, key, () =>
       this.boxFromLines(
-        [this.theme.fg("muted", ` ${this.tree.treeRoot}`)],
+        [this.theme.fg("muted", text)],
         paddingX,
         contentWidth,
         "selectedBg",
@@ -475,15 +695,13 @@ export class FileViewerOverlay {
   }
 
   private renderFooter(width: number, paddingX: number, contentWidth: number): string[] {
-    const key = `${width}:${paddingX}:${contentWidth}`;
+    const text = this.mode === "search"
+      ? " Type to filter git-tracked files  •  ↑↓: move  •  Enter: reveal in tree  •  Backspace: delete  •  Esc/Ctrl+C: back "
+      : " /: search tracked files  •  ↑↓: move  •  j/k: move or preview scroll  •  Ctrl+U/D: preview page scroll  •  s: pin/unpin next-turn ctx  •  h/l/q/Esc: close preview or fold/unfold  •  Enter: preview, then edit  •  r: reload  •  Ctrl+C: close ";
+    const key = `${width}:${paddingX}:${contentWidth}:${this.mode}`;
     this.footerCache = getCachedLines(this.footerCache, key, () =>
       this.boxFromLines(
-        [
-          this.theme.fg(
-            "text",
-            " ↑↓: move  •  j/k: move or preview scroll  •  Ctrl+U/D: preview page scroll  •  s: pin/unpin next-turn ctx  •  h/l/q/Esc: close preview or fold/unfold  •  Enter: preview, then edit  •  r: reload  •  Ctrl+C: close ",
-          ),
-        ],
+        [this.theme.fg("text", text)],
         paddingX,
         contentWidth,
         "customMessageBg",
@@ -522,20 +740,56 @@ export class FileViewerOverlay {
     return this.treePanelCache.lines;
   }
 
+  private renderSearchPanel(width: number, height: number, paddingX: number): string[] {
+    const key = [
+      width,
+      height,
+      paddingX,
+      this.search.version,
+      this.search.scroll,
+      this.search.selected,
+      this.chatContextPath ?? "",
+    ].join(":");
+    this.searchPanelCache = getCachedLines(this.searchPanelCache, key, () => {
+      const visibleRows = this.search.results.slice(
+        this.search.scroll,
+        this.search.scroll + Math.max(1, height),
+      );
+      return this.boxFromLines(
+        Array.from({ length: Math.max(1, height) }, (_, index) =>
+          this.renderSearchLine(
+            visibleRows[index],
+            width,
+            this.search.scroll + index === this.search.selected,
+          ),
+        ),
+        paddingX,
+        width,
+      ).render(width + paddingX * 2);
+    });
+    return this.searchPanelCache.lines;
+  }
+
+  private leftPanelWidth(contentWidth: number, gutterWidth: number): number {
+    return Math.max(10, Math.floor((contentWidth - gutterWidth) * 0.15));
+  }
+
   private renderPreviewPanel(width: number, height: number): string[] {
     const bodyHeight = Math.max(1, height);
     this.preview.previewPageStep = Math.max(1, Math.floor(bodyHeight / 2));
     const maxScroll = Math.max(0, this.preview.lineCount() - bodyHeight);
     this.preview.previewScroll = Math.min(this.preview.previewScroll, maxScroll);
 
-    const path = this.preview.previewPath;
-    if (!path) return Array.from({ length: bodyHeight }, () => this.renderPreviewLine(width));
+    const previewPath = this.preview.previewPath;
+    if (!previewPath) {
+      return Array.from({ length: bodyHeight }, () => this.renderPreviewLine(width));
+    }
 
     const scroll = this.preview.previewScroll;
     const cached = this.previewPanelCache;
     if (
       cached &&
-      cached.path === path &&
+      cached.path === previewPath &&
       cached.width === width &&
       cached.height === bodyHeight
     ) {
@@ -544,14 +798,14 @@ export class FileViewerOverlay {
       if (cached.scroll + 1 === scroll) {
         const lines = cached.lines.slice(1);
         lines.push(this.renderPreviewLine(width, this.preview.lineAt(scroll + bodyHeight - 1)));
-        this.previewPanelCache = { path, width, height: bodyHeight, scroll, lines };
+        this.previewPanelCache = { path: previewPath, width, height: bodyHeight, scroll, lines };
         return lines;
       }
 
       if (cached.scroll - 1 === scroll) {
         const lines = cached.lines.slice(0, -1);
         lines.unshift(this.renderPreviewLine(width, this.preview.lineAt(scroll)));
-        this.previewPanelCache = { path, width, height: bodyHeight, scroll, lines };
+        this.previewPanelCache = { path: previewPath, width, height: bodyHeight, scroll, lines };
         return lines;
       }
     }
@@ -560,7 +814,13 @@ export class FileViewerOverlay {
       .visibleLines(bodyHeight)
       .map((line) => this.renderPreviewLine(width, line));
     while (lines.length < bodyHeight) lines.push(this.renderPreviewLine(width));
-    this.previewPanelCache = { path, width, height: bodyHeight, scroll, lines };
+    this.previewPanelCache = {
+      path: previewPath,
+      width,
+      height: bodyHeight,
+      scroll,
+      lines,
+    };
     return lines;
   }
 
@@ -675,6 +935,59 @@ function findRowIndex(rows: TreeRow[], fullPath: string): number {
   }
 
   return 0;
+}
+
+function findSearchIndex(results: SearchHit[], fullPath: string | undefined): number {
+  if (!fullPath) return 0;
+  const index = results.findIndex((result) => result.fullPath === fullPath);
+  return index === -1 ? 0 : index;
+}
+
+function scoreTrackedFile(file: TrackedFile, query: string): number | undefined {
+  if (query.length === 0) return 0;
+
+  if (file.normalizedBaseName === query) return 700;
+  if (file.normalizedPath === query) return 650;
+  if (file.normalizedBaseName.startsWith(query)) {
+    return 600 - (file.normalizedBaseName.length - query.length);
+  }
+  if (file.normalizedPath.startsWith(query)) {
+    return 550 - (file.normalizedPath.length - query.length);
+  }
+
+  const baseIndex = file.normalizedBaseName.indexOf(query);
+  if (baseIndex !== -1) return 500 - baseIndex;
+
+  const pathIndex = file.normalizedPath.indexOf(query);
+  if (pathIndex !== -1) return 400 - pathIndex;
+
+  const gapPenalty = subsequenceGap(file.normalizedPath, query);
+  if (gapPenalty === undefined) return undefined;
+  return 250 - Math.min(200, gapPenalty);
+}
+
+function subsequenceGap(text: string, query: string): number | undefined {
+  let queryIndex = 0;
+  let lastMatch = -1;
+  let gap = 0;
+
+  for (let index = 0; index < text.length && queryIndex < query.length; index++) {
+    if (text[index] !== query[queryIndex]) continue;
+    if (lastMatch !== -1) gap += index - lastMatch - 1;
+    lastMatch = index;
+    queryIndex += 1;
+  }
+
+  return queryIndex === query.length ? gap : undefined;
+}
+
+function isPrintableInput(data: string): boolean {
+  return data.length > 0 && !/[\x00-\x1f\x7f]/.test(data);
+}
+
+function isWithin(target: string, base: string): boolean {
+  const relativePath = path.relative(base, target);
+  return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
 }
 
 function indent(depth: number): string {
