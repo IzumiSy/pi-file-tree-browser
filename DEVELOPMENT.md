@@ -1,13 +1,21 @@
 # DEVELOPMENT
 
-This file is for developers and AI agents working on this repository.
+This file is for developers and AI agents working on this repository to keep implementation work aligned.
 
-It exists to keep implementation work aligned without turning into product/spec documentation.
+Make sure to follow the rules below before/after making changes.
 
 ## Code quality
 
-Type-check with:
+Always run type-check and tests before committing to keep the codebase clean.
+
+### Type-check
 
 ```bash
 pnpm type-check
+```
+
+### Tests
+
+```bash
+pnpm test
 ```
