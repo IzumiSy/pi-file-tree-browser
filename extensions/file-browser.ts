@@ -27,8 +27,6 @@ export type TreeRow = {
   fullPath: string;
   label: string;
   isDirectory: boolean;
-  depth: number;
-  isExpanded: boolean;
 };
 
 export type SearchHit = {
@@ -47,10 +45,10 @@ const HELP_LINES = [
   "",
   "Navigation",
   "↑↓ / j k  Move selection or preview scroll",
-  "Ctrl+U/D   Move tree by 4 rows, help/preview by half a page",
-  "h / ←      Fold directory or close preview",
-  "l / →      Expand directory, reroot, or open preview",
-  "Enter      Preview file, then open editor",
+  "Ctrl+U/D   Move list by 4 rows, help/preview by half a page",
+  "h / ←      Go to parent directory or close preview",
+  "l / →      Open directory or preview file",
+  "Enter      Open directory, preview file, then open editor",
   "",
   "Search",
   "/          Search git-tracked files",
@@ -65,7 +63,7 @@ const HELP_LINES = [
   "Preview",
   "Ctrl+U/D   Scroll preview by half a page",
   "q          Close preview or browser",
-  "r          Reload tree",
+  "r          Reload directory",
   "Ctrl+C     Close browser",
   "",
   "Press ? again to close this help.",
@@ -86,14 +84,12 @@ export class FileTreeModel {
   selected = 0;
   scroll = 0;
   version = 0;
-  readonly expandedPaths = new Set<string>();
 
   constructor(
     private readonly cwd: string,
     private readonly files: FileRepositoryLike,
   ) {
     this.treeRoot = cwd;
-    this.expandedPaths.add(cwd);
     this.reload();
   }
 
@@ -109,7 +105,7 @@ export class FileTreeModel {
   }
 
   reload(selectedPath = this.currentRow()?.fullPath ?? this.treeRoot): void {
-    this.rows = buildTreeRows(this.treeRoot, this.expandedPaths, this.files);
+    this.rows = buildTreeRows(this.treeRoot, this.files);
     this.selected = findRowIndex(this.rows, selectedPath);
     this.scroll = Math.min(this.scroll, Math.max(0, this.rows.length - 1));
     this.version += 1;
@@ -119,58 +115,18 @@ export class FileTreeModel {
     const row = this.currentRow();
     if (!row?.isDirectory) return;
 
-    if (row.isExpanded) {
-      this.treeRoot = row.fullPath;
-      onReroot();
-      this.reload();
-      return;
-    }
-
-    this.expandedPaths.add(row.fullPath);
+    this.treeRoot = row.fullPath;
+    onReroot();
     this.reload();
-  }
-
-  toggleDirectorySelected(): boolean {
-    const row = this.currentRow();
-    if (!row?.isDirectory) return false;
-
-    if (row.isExpanded) {
-      this.expandedPaths.delete(row.fullPath);
-    } else {
-      this.expandedPaths.add(row.fullPath);
-    }
-    this.reload();
-    return true;
   }
 
   collapseSelected(onReroot: () => void): void {
-    const row = this.currentRow();
-    if (!row) return;
+    if (this.treeRoot === this.cwd) return;
 
-    if (row.isDirectory && row.isExpanded) {
-      this.expandedPaths.delete(row.fullPath);
-      this.reload();
-      return;
-    }
-
-    const parentPath = path.dirname(row.fullPath);
-    const parentIndex = this.rows.findIndex(
-      (candidate) => candidate.fullPath === parentPath,
-    );
-    if (parentIndex !== -1) {
-      if (this.selected !== parentIndex) {
-        this.selected = parentIndex;
-        this.version += 1;
-      }
-      return;
-    }
-
-    if (this.treeRoot !== this.cwd) {
-      const previousRoot = this.treeRoot;
-      this.treeRoot = path.dirname(this.treeRoot);
-      onReroot();
-      this.reload(previousRoot);
-    }
+    const previousRoot = this.treeRoot;
+    this.treeRoot = path.dirname(this.treeRoot);
+    onReroot();
+    this.reload(previousRoot);
   }
 
   keepSelectionVisible(bodyHeight: number): void {
@@ -703,17 +659,8 @@ export class FileViewerOverlay {
   }
 
   private revealInTree(fullPath: string): void {
-    if (!isWithin(fullPath, this.tree.treeRoot)) {
-      this.tree.treeRoot = this.cwd;
-    }
-
-    let current = path.dirname(fullPath);
-    while (isWithin(current, this.cwd) && current !== path.dirname(current)) {
-      this.tree.expandedPaths.add(current);
-      if (current === this.tree.treeRoot) break;
-      current = path.dirname(current);
-    }
-
+    const nextRoot = path.dirname(fullPath);
+    this.tree.treeRoot = isWithin(nextRoot, this.cwd) ? nextRoot : this.cwd;
     this.tree.reload(fullPath);
   }
 
@@ -722,7 +669,9 @@ export class FileViewerOverlay {
     if (!row || row.fullPath.endsWith("#more")) return;
 
     if (row.isDirectory) {
-      this.tree.toggleDirectorySelected();
+      this.tree.expandSelected(() => {
+        this.preview.close();
+      });
       return;
     }
 
@@ -892,7 +841,7 @@ export class FileViewerOverlay {
   }
 
   private leftPanelWidth(contentWidth: number, gutterWidth: number): number {
-    return Math.max(10, Math.floor((contentWidth - gutterWidth) * 0.15));
+    return Math.max(10, Math.min(48, contentWidth - gutterWidth));
   }
 
   private renderPreviewPanel(width: number, height: number): string[] {
@@ -996,7 +945,6 @@ export class FileViewerOverlay {
 
 function buildTreeRows(
   root: string,
-  expandedPaths: ReadonlySet<string>,
   files: FileRepositoryLike,
 ): TreeRow[] {
   const rows: TreeRow[] = [];
@@ -1004,17 +952,11 @@ function buildTreeRows(
   const shown = entries.slice(0, 40);
 
   for (const entry of shown) {
-    if (entry.isDirectory) {
-      visit(entry.fullPath, 0);
-    } else {
-      rows.push({
-        fullPath: entry.fullPath,
-        label: entry.name,
-        isDirectory: false,
-        depth: 0,
-        isExpanded: false,
-      });
-    }
+    rows.push({
+      fullPath: entry.fullPath,
+      label: entry.isDirectory ? `${entry.name}/` : entry.name,
+      isDirectory: entry.isDirectory,
+    });
   }
 
   if (entries.length > shown.length) {
@@ -1022,54 +964,10 @@ function buildTreeRows(
       fullPath: `${root}#more`,
       label: `… ${entries.length - shown.length} more`,
       isDirectory: false,
-      depth: 0,
-      isExpanded: false,
     });
   }
 
   return rows;
-
-  function visit(dir: string, depth: number): void {
-    const name = path.basename(dir);
-    const isExpanded = expandedPaths.has(dir);
-
-    rows.push({
-      fullPath: dir,
-      label: `${indent(depth)}${isExpanded ? "▾" : "▸"} ${name}/`,
-      isDirectory: true,
-      depth,
-      isExpanded,
-    });
-
-    if (!isExpanded) return;
-
-    const entries = files.listEntries(dir);
-    const shown = entries.slice(0, 40);
-
-    for (const entry of shown) {
-      if (entry.isDirectory) {
-        visit(entry.fullPath, depth + 1);
-      } else {
-        rows.push({
-          fullPath: entry.fullPath,
-          label: `${indent(depth + 1)}${entry.name}`,
-          isDirectory: false,
-          depth: depth + 1,
-          isExpanded: false,
-        });
-      }
-    }
-
-    if (entries.length > shown.length) {
-      rows.push({
-        fullPath: `${dir}#more`,
-        label: `${indent(depth + 1)}… ${entries.length - shown.length} more`,
-        isDirectory: false,
-        depth: depth + 1,
-        isExpanded: false,
-      });
-    }
-  }
 }
 
 function findRowIndex(rows: TreeRow[], fullPath: string): number {
@@ -1107,6 +1005,3 @@ function isWithin(target: string, base: string): boolean {
   return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
 }
 
-function indent(depth: number): string {
-  return "  ".repeat(depth);
-}

@@ -80,7 +80,7 @@ function tracked(relativePath: string): TrackedFile {
 }
 
 describe("FileTreeModel", () => {
-  it("expands and collapses directories", () => {
+  it("shows only the current directory entries", () => {
     const files = new FakeFileRepository({
       "/root": [entry("/root/src", true), entry("/root/README.md", false)],
       "/root/src": [entry("/root/src/index.ts", false)],
@@ -88,20 +88,10 @@ describe("FileTreeModel", () => {
 
     const tree = new FileTreeModel("/root", files);
 
-    expect(tree.rows.map((row) => row.label)).toEqual(["▸ src/", "README.md"]);
-
-    expect(tree.toggleDirectorySelected()).toBe(true);
-    expect(tree.rows.map((row) => row.label)).toEqual([
-      "▾ src/",
-      "  index.ts",
-      "README.md",
-    ]);
-
-    expect(tree.toggleDirectorySelected()).toBe(true);
-    expect(tree.rows.map((row) => row.label)).toEqual(["▸ src/", "README.md"]);
+    expect(tree.rows.map((row) => row.label)).toEqual(["src/", "README.md"]);
   });
 
-  it("reroots into expanded directories and can climb back out", () => {
+  it("reroots into directories and can climb back out", () => {
     const files = new FakeFileRepository({
       "/root": [entry("/root/src", true), entry("/root/README.md", false)],
       "/root/src": [entry("/root/src/index.ts", false)],
@@ -109,12 +99,6 @@ describe("FileTreeModel", () => {
 
     const tree = new FileTreeModel("/root", files);
     let reroots = 0;
-
-    tree.expandSelected(() => {
-      reroots += 1;
-    });
-    expect(tree.treeRoot).toBe("/root");
-    expect(reroots).toBe(0);
 
     tree.expandSelected(() => {
       reroots += 1;
@@ -353,9 +337,9 @@ describe("FileViewerOverlay", () => {
     expect(committed).toEqual([["/root/a.ts", "/root/b.ts"]]);
   });
 
-  it("shows only a header help hint and no footer", () => {
+  it("keeps the tree pane in a stable split layout before and after preview opens", () => {
     const files = new FakeFileRepository({
-      "/root": [entry("/root/a.ts", false), entry("/root/b.ts", false)],
+      "/root": [entry("/root/very-long-file-name.ts", false), entry("/root/b.ts", false)],
     });
 
     const overlay = new FileViewerOverlay(
@@ -373,10 +357,44 @@ describe("FileViewerOverlay", () => {
       () => {},
     );
 
-    const rendered = overlay.render(40);
-    expect(rendered[0]).toContain("Press ? for help");
-    expect(rendered.join("\n")).not.toContain("Ctrl+C: close");
-    expect(rendered).toHaveLength(10);
+    const before = overlay.render(80);
+    overlay.handleInput("\r");
+    const after = overlay.render(80);
+
+    expect(before[0]).toContain("Press ? for help");
+    expect(before.join("\n")).toContain("very-long-file-name.ts");
+    expect(before.join("\n")).not.toContain("Ctrl+C: close");
+    expect(before).toHaveLength(10);
+    expect(before[1]?.slice(0, 48)).toBe(after[1]?.slice(0, 48));
+  });
+
+  it("reroots into directories from the main list", () => {
+    const files = new FakeFileRepository({
+      "/root": [entry("/root/src", true), entry("/root/README.md", false)],
+      "/root/src": [entry("/root/src/index.ts", false)],
+    });
+
+    const overlay = new FileViewerOverlay(
+      "/root",
+      { requestRender() {}, terminal: { rows: 10 } } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as never,
+      files,
+      [],
+      undefined,
+      () => {},
+      () => {},
+    );
+
+    overlay.handleInput("\r");
+    expect((overlay as any).tree.treeRoot).toBe("/root/src");
+    expect(overlay.render(40).join("\n")).toContain("index.ts");
+
+    overlay.handleInput("h");
+    expect((overlay as any).tree.treeRoot).toBe("/root");
   });
 
   it("opens help in-place without overflowing the viewport and closes it cleanly", () => {
