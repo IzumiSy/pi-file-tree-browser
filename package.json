@@ -22,7 +22,7 @@
   },
   "pi": {
     "extensions": [
-      "./extensions"
+      "./extensions/main.ts"
     ]
   }
 }
