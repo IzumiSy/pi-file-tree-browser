@@ -284,6 +284,41 @@ describe("FileViewerOverlay", () => {
     expect(results).toEqual([{ kind: "session-pin", fullPath: "/root/file.ts" }]);
   });
 
+  it("moves by 4 rows with ctrl+u/d in the tree", () => {
+    const files = new FakeFileRepository({
+      "/root": [
+        entry("/root/a.ts", false),
+        entry("/root/b.ts", false),
+        entry("/root/c.ts", false),
+        entry("/root/d.ts", false),
+        entry("/root/e.ts", false),
+        entry("/root/f.ts", false),
+      ],
+    });
+
+    const overlay = new FileViewerOverlay(
+      "/root",
+      { requestRender() {}, terminal: { rows: 11 } } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as never,
+      files,
+      [],
+      undefined,
+      () => {},
+      () => {},
+    );
+
+    overlay.render(80);
+    overlay.handleInput(String.fromCharCode(4));
+    expect((overlay as any).tree.currentRow()?.fullPath).toBe("/root/e.ts");
+
+    overlay.handleInput(String.fromCharCode(21));
+    expect((overlay as any).tree.currentRow()?.fullPath).toBe("/root/a.ts");
+  });
+
   it("toggles multiple next-turn pins with s", () => {
     const files = new FakeFileRepository({
       "/root": [entry("/root/a.ts", false), entry("/root/b.ts", false)],
@@ -316,6 +351,32 @@ describe("FileViewerOverlay", () => {
 
     overlay.handleInput("q");
     expect(committed).toEqual([["/root/a.ts", "/root/b.ts"]]);
+  });
+
+  it("shows only a header help hint and no footer", () => {
+    const files = new FakeFileRepository({
+      "/root": [entry("/root/a.ts", false), entry("/root/b.ts", false)],
+    });
+
+    const overlay = new FileViewerOverlay(
+      "/root",
+      { requestRender() {}, terminal: { rows: 10 } } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as never,
+      files,
+      [],
+      undefined,
+      () => {},
+      () => {},
+    );
+
+    const rendered = overlay.render(40);
+    expect(rendered[0]).toContain("Press ? for help");
+    expect(rendered.join("\n")).not.toContain("Ctrl+C: close");
+    expect(rendered).toHaveLength(10);
   });
 
   it("opens help in-place without overflowing the viewport and closes it cleanly", () => {

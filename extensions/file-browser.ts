@@ -40,11 +40,14 @@ export type SearchHit = {
 type BgColor = "selectedBg" | "customMessageBg" | "toolPendingBg";
 type ViewerMode = "tree" | "search" | "help";
 
+const TREE_PAGE_STEP = 4;
+
 const HELP_LINES = [
   "File browser help",
   "",
   "Navigation",
   "↑↓ / j k  Move selection or preview scroll",
+  "Ctrl+U/D   Move tree by 4 rows, help/preview by half a page",
   "h / ←      Fold directory or close preview",
   "l / →      Expand directory, reroot, or open preview",
   "Enter      Preview file, then open editor",
@@ -368,11 +371,11 @@ export class FileViewerOverlay {
   private readonly search: FileSearchModel;
   private readonly preview: PreviewModel;
   private mode: ViewerMode = "tree";
+  private treePageStep = TREE_PAGE_STEP;
   private previousMode: Exclude<ViewerMode, "help"> = "tree";
   private helpScroll = 0;
   private helpPageStep = 1;
   private headerCache: RenderCache | undefined;
-  private footerCache: RenderCache | undefined;
   private treePanelCache: RenderCache | undefined;
   private searchPanelCache: RenderCache | undefined;
   private previewPanelCache: PreviewViewportCache | undefined;
@@ -462,6 +465,9 @@ export class FileViewerOverlay {
       if (this.preview.isOpen()) {
         this.preview.scrollBy(-this.preview.previewPageStep);
         this.tui.requestRender();
+      } else if (this.mode === "tree") {
+        this.tree.move(-this.treePageStep);
+        this.tui.requestRender();
       }
       return;
     }
@@ -469,6 +475,9 @@ export class FileViewerOverlay {
     if (matchesKey(data, "ctrl+d")) {
       if (this.preview.isOpen()) {
         this.preview.scrollBy(this.preview.previewPageStep);
+        this.tui.requestRender();
+      } else if (this.mode === "tree") {
+        this.tree.move(this.treePageStep);
         this.tui.requestRender();
       }
       return;
@@ -528,7 +537,7 @@ export class FileViewerOverlay {
 
   render(width: number): string[] {
     const terminalHeight = Math.max(1, this.tui.terminal.rows);
-    const bodyRows = Math.max(1, terminalHeight - 3);
+    const bodyRows = Math.max(1, terminalHeight - 1);
 
     if (this.mode === "search") {
       this.search.keepSelectionVisible(bodyRows);
@@ -542,13 +551,11 @@ export class FileViewerOverlay {
 
     if (this.mode === "help") {
       lines.push(...this.renderHelpPanel(contentWidth, bodyRows, paddingX));
-      lines.push(...this.renderFooter(width, paddingX, contentWidth));
       return lines;
     }
 
     if (this.mode === "search") {
       lines.push(...this.renderSearchPanel(contentWidth, bodyRows, paddingX));
-      lines.push(...this.renderFooter(width, paddingX, contentWidth));
       return lines;
     }
 
@@ -575,13 +582,11 @@ export class FileViewerOverlay {
       lines.push(...this.joinColumns(leftLines, rightLines, gutterWidth));
     }
 
-    lines.push(...this.renderFooter(width, paddingX, contentWidth));
     return lines;
   }
 
   invalidate(): void {
     this.headerCache = undefined;
-    this.footerCache = undefined;
     this.treePanelCache = undefined;
     this.searchPanelCache = undefined;
     this.previewPanelCache = undefined;
@@ -791,39 +796,24 @@ export class FileViewerOverlay {
   }
 
   private renderHeader(width: number, paddingX: number, contentWidth: number): string[] {
-    const text = this.mode === "search"
+    const leftText = this.mode === "search"
       ? ` / ${this.search.query || ""} (${this.search.results.length})`
       : this.mode === "help"
         ? " help"
         : ` ${this.tree.treeRoot}`;
-    const key = `${width}:${paddingX}:${contentWidth}:${this.mode}:${text}`;
+    const rightText = "Press ? for help";
+    const leftWidth = Math.max(1, contentWidth - rightText.length - 1);
+    const line = `${this.theme.fg("muted", fit(leftWidth, leftText))} ${this.theme.fg("accent", rightText)}`;
+    const key = `${width}:${paddingX}:${contentWidth}:${this.mode}:${leftText}`;
     this.headerCache = getCachedLines(this.headerCache, key, () =>
       this.boxFromLines(
-        [this.theme.fg("muted", text)],
+        [line],
         paddingX,
         contentWidth,
         "selectedBg",
       ).render(width),
     );
     return this.headerCache.lines;
-  }
-
-  private renderFooter(width: number, paddingX: number, contentWidth: number): string[] {
-    const text = this.mode === "help"
-      ? " ↑↓/j/k: scroll  •  Ctrl+U/D: page  •  ?/Enter/Esc/q: back "
-      : this.mode === "search"
-        ? " Type to filter  •  ↑↓: move  •  Enter: reveal  •  Backspace: delete  •  ?: help  •  Esc/Ctrl+C: back "
-        : " /: search  •  ↑↓: move  •  Enter: preview/edit  •  s: pin next turn  •  Ctrl+S: pin session  •  ?: help  •  Ctrl+C: close ";
-    const key = `${width}:${paddingX}:${contentWidth}:${this.mode}`;
-    this.footerCache = getCachedLines(this.footerCache, key, () =>
-      this.boxFromLines(
-        [this.theme.fg("text", text)],
-        paddingX,
-        contentWidth,
-        "customMessageBg",
-      ).render(width),
-    );
-    return this.footerCache.lines;
   }
 
   private renderHelpPanel(width: number, height: number, paddingX: number): string[] {
