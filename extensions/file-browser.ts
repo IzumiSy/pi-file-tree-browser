@@ -193,6 +193,16 @@ export class PreviewModel {
     );
   }
 
+  lineAt(index: number): string | undefined {
+    if (!this.previewPath || !this.previewData || index < 0) return undefined;
+    return this.files.renderPreviewLines(
+      this.previewPath,
+      this.previewData,
+      index,
+      1,
+    )[0];
+  }
+
   lineCount(): number {
     return this.previewData?.fallbackLines.length ?? 0;
   }
@@ -200,12 +210,21 @@ export class PreviewModel {
   invalidate(): void {}
 }
 
+type PreviewViewportCache = {
+  path: string;
+  width: number;
+  height: number;
+  scroll: number;
+  lines: string[];
+};
+
 export class FileViewerOverlay {
   private readonly tree: FileTreeModel;
   private readonly preview: PreviewModel;
   private headerCache: RenderCache | undefined;
   private footerCache: RenderCache | undefined;
   private treePanelCache: RenderCache | undefined;
+  private previewPanelCache: PreviewViewportCache | undefined;
 
   constructor(
     cwd: string,
@@ -376,6 +395,7 @@ export class FileViewerOverlay {
     this.headerCache = undefined;
     this.footerCache = undefined;
     this.treePanelCache = undefined;
+    this.previewPanelCache = undefined;
     this.preview.invalidate();
   }
 
@@ -507,11 +527,45 @@ export class FileViewerOverlay {
     this.preview.previewPageStep = Math.max(1, Math.floor(bodyHeight / 2));
     const maxScroll = Math.max(0, this.preview.lineCount() - bodyHeight);
     this.preview.previewScroll = Math.min(this.preview.previewScroll, maxScroll);
-    const lines = this.preview.visibleLines(bodyHeight);
 
-    return Array.from({ length: bodyHeight }, (_, index) =>
-      this.theme.bg(PREVIEW_BG, fit(width, lines[index] ?? "")),
-    );
+    const path = this.preview.previewPath;
+    if (!path) return Array.from({ length: bodyHeight }, () => this.renderPreviewLine(width));
+
+    const scroll = this.preview.previewScroll;
+    const cached = this.previewPanelCache;
+    if (
+      cached &&
+      cached.path === path &&
+      cached.width === width &&
+      cached.height === bodyHeight
+    ) {
+      if (cached.scroll === scroll) return cached.lines;
+
+      if (cached.scroll + 1 === scroll) {
+        const lines = cached.lines.slice(1);
+        lines.push(this.renderPreviewLine(width, this.preview.lineAt(scroll + bodyHeight - 1)));
+        this.previewPanelCache = { path, width, height: bodyHeight, scroll, lines };
+        return lines;
+      }
+
+      if (cached.scroll - 1 === scroll) {
+        const lines = cached.lines.slice(0, -1);
+        lines.unshift(this.renderPreviewLine(width, this.preview.lineAt(scroll)));
+        this.previewPanelCache = { path, width, height: bodyHeight, scroll, lines };
+        return lines;
+      }
+    }
+
+    const lines = this.preview
+      .visibleLines(bodyHeight)
+      .map((line) => this.renderPreviewLine(width, line));
+    while (lines.length < bodyHeight) lines.push(this.renderPreviewLine(width));
+    this.previewPanelCache = { path, width, height: bodyHeight, scroll, lines };
+    return lines;
+  }
+
+  private renderPreviewLine(width: number, line = ""): string {
+    return this.theme.bg(PREVIEW_BG, fit(width, line));
   }
 
   private joinColumns(

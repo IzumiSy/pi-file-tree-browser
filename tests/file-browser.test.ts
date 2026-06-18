@@ -140,10 +140,12 @@ describe("PreviewModel", () => {
     model.open("/root/file.ts");
     expect(model.isOpen()).toBe(true);
     expect(model.visibleLines(2)).toEqual(["hl:one", "hl:two"]);
+    expect(model.lineAt(1)).toBe("hl:two");
 
     model.scrollBy(5);
     expect(model.previewScroll).toBe(5);
     expect(model.visibleLines(2)).toEqual([]);
+    expect(model.lineAt(0)).toBe("hl:one");
 
     model.invalidate();
     expect(model.visibleLines(2)).toEqual([]);
