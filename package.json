@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "",
   "scripts": {
+    "dev": "pi -e extensions/main.ts",
     "type-check": "tsc -b --noEmit",
     "test": "vitest run"
   },
