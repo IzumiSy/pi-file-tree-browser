@@ -7,33 +7,25 @@ import {
 import {
   Container,
   matchesKey,
-  type SettingItem,
   SettingsList,
   Text,
 } from "@earendil-works/pi-tui";
 
 import { FileViewerOverlay, type FileViewerResult } from "./file-browser";
-import { FileRepository, fit } from "./file-repository";
+import { FileRepository } from "./file-repository";
+import {
+  buildPinManagerItems,
+  buildPinnedFileContextText,
+  ensurePath,
+  type PinManagerState,
+  readSessionContextPath,
+  SESSION_CONTEXT_ENTRY,
+} from "./pinned-files";
+import { fit } from "./text-layout";
 
 const files = new FileRepository();
-const SESSION_CONTEXT_ENTRY = "files-session-context";
 let pendingChatContextPaths: string[] = [];
 let sessionChatContextPath: string | undefined;
-
-type SessionContextEntry = {
-  fullPath?: string;
-};
-
-type SessionEntryLike = {
-  type?: string;
-  customType?: string;
-  data?: unknown;
-};
-
-type PinManagerState = {
-  sessionPath: string | undefined;
-  nextTurnPaths: string[];
-};
 
 export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
@@ -50,6 +42,7 @@ export default function (pi: ExtensionAPI) {
       ctx.cwd,
       sessionChatContextPath,
       nextTurnPaths,
+      files,
     );
     if (!pinnedContext) return;
 
@@ -138,84 +131,12 @@ export default function (pi: ExtensionAPI) {
   });
 }
 
-export function readSessionContextPath(
-  entries: ReadonlyArray<SessionEntryLike>,
-): string | undefined {
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    const entry = entries[index];
-    if (!entry) continue;
-    if (entry.type !== "custom" || entry.customType !== SESSION_CONTEXT_ENTRY) continue;
-
-    const data = entry.data;
-    if (!data || typeof data !== "object") return undefined;
-
-    const fullPath = (data as SessionContextEntry).fullPath;
-    return typeof fullPath === "string" && fullPath.length > 0 ? fullPath : undefined;
-  }
-
-  return undefined;
-}
-
-export function buildPinnedFileContextText(
-  cwd: string,
-  sessionPath: string | undefined,
-  nextTurnPaths: ReadonlyArray<string>,
-): string | undefined {
-  const labels = new Map<string, string[]>();
-
-  if (sessionPath) labels.set(sessionPath, ["session"]);
-  for (const nextTurnPath of nextTurnPaths) {
-    labels.set(nextTurnPath, [...(labels.get(nextTurnPath) ?? []), "next turn"]);
-  }
-
-  if (labels.size === 0) return undefined;
-
-  const lines = [...labels.entries()].map(([fullPath, scopes]) => {
-    const scope = scopes.join(" + ");
-    return `- ${scope}: ${files.displayPath(fullPath, cwd)}`;
-  });
-
-  return [
-    "## Pinned file context",
-    "Treat these pinned files as high-priority context for this conversation. When relevant, read them before answering questions or making changes.",
-    ...lines,
-  ].join("\n");
-}
-
-export function buildPinManagerItems(
-  cwd: string,
-  sessionPath: string | undefined,
-  nextTurnPaths: ReadonlyArray<string>,
-): SettingItem[] {
-  const items: SettingItem[] = [];
-
-  for (const fullPath of nextTurnPaths) {
-    items.push({
-      id: `next-turn:${fullPath}`,
-      label: files.displayPath(fullPath, cwd),
-      currentValue: "keep",
-      values: ["keep", "remove"],
-    });
-  }
-
-  if (sessionPath) {
-    items.push({
-      id: `session:${sessionPath}`,
-      label: files.displayPath(sessionPath, cwd),
-      currentValue: "keep",
-      values: ["keep", "remove"],
-    });
-  }
-
-  return items;
-}
-
 async function showPinManagerDialog(
   ctx: ExtensionContext,
 ): Promise<PinManagerState | undefined> {
   let sessionPath = sessionChatContextPath;
   let nextTurnPaths = [...pendingChatContextPaths];
-  const items = buildPinManagerItems(ctx.cwd, sessionPath, nextTurnPaths);
+  const items = buildPinManagerItems(ctx.cwd, sessionPath, nextTurnPaths, files);
 
   if (items.length === 0) return undefined;
 
@@ -283,10 +204,6 @@ async function showPinManagerDialog(
   });
 }
 
-function ensurePath(paths: ReadonlyArray<string>, fullPath: string): string[] {
-  return paths.includes(fullPath) ? [...paths] : [...paths, fullPath];
-}
-
 function updateChatContextWidget(
   ctx: ExtensionContext,
   sessionPath: string | undefined,
@@ -305,7 +222,7 @@ function updateChatContextWidget(
 
       if (sessionPath) {
         lines.push(
-          fitWidgetLine(
+          fit(
             width,
             `${theme.fg("muted", "Pinned session file:")} ${theme.fg("accent", files.displayPath(sessionPath, ctx.cwd))}`,
           ),
@@ -314,7 +231,7 @@ function updateChatContextWidget(
 
       if (nextTurnPaths.length > 0) {
         lines.push(
-          fitWidgetLine(
+          fit(
             width,
             `${theme.fg("muted", "Pinned next-turn files:")} ${theme.fg("accent", nextTurnPaths.map((fullPath) => files.displayPath(fullPath, ctx.cwd)).join(", "))}`,
           ),
@@ -352,8 +269,4 @@ async function openFileEditor(
     const message = error instanceof Error ? error.message : String(error);
     ctx.ui.notify(`editor error: ${message}`, "error");
   }
-}
-
-function fitWidgetLine(width: number, text: string): string {
-  return fit(width, text);
 }

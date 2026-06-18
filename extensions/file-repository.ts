@@ -4,7 +4,6 @@ import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { getLanguageFromPath, highlightCode } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 const FG_RESET = "\x1b[39m";
 
@@ -240,11 +239,6 @@ export class FileRepository {
       return a.relativePath.localeCompare(b.relativePath);
     });
   }
-}
-
-export function fit(width: number, text: string): string {
-  const clipped = truncateToWidth(text, width, "", true);
-  return clipped + " ".repeat(Math.max(0, width - visibleWidth(clipped)));
 }
 
 function ensureForegroundReset(line: string): string {

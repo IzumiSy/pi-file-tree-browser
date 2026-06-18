@@ -7,10 +7,10 @@ import { Box, matchesKey, Text, type TUI } from "@earendil-works/pi-tui";
 
 import {
   type FileRepository,
-  fit,
   type PreviewData,
   type TrackedFile,
 } from "./file-repository";
+import { fit } from "./text-layout";
 
 type FileRepositoryLike = Pick<
   FileRepository,

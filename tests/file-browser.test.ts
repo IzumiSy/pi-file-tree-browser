@@ -9,7 +9,7 @@ import {
   buildPinManagerItems,
   buildPinnedFileContextText,
   readSessionContextPath,
-} from "../extensions/main";
+} from "../extensions/pinned-files";
 import type {
   PreviewData,
   TrackedFile,
@@ -79,6 +79,12 @@ function tracked(relativePath: string, isDirectory = false): TrackedFile {
     isDirectory,
   };
 }
+
+const pathDisplayer = {
+  displayPath(fullPath: string, cwd: string): string {
+    return fullPath.startsWith(`${cwd}/`) ? fullPath.slice(cwd.length + 1) : fullPath;
+  },
+};
 
 describe("FileTreeModel", () => {
   it("shows only the current directory entries", () => {
@@ -496,7 +502,7 @@ describe("session file pin helpers", () => {
 
   it("deduplicates session and next-turn pins in the prompt text", () => {
     expect(
-      buildPinnedFileContextText("/root", "/root/file.ts", ["/root/file.ts"]),
+      buildPinnedFileContextText("/root", "/root/file.ts", ["/root/file.ts"], pathDisplayer),
     ).toContain("- session + next turn: file.ts");
   });
 
@@ -504,7 +510,7 @@ describe("session file pin helpers", () => {
     const text = buildPinnedFileContextText("/root", undefined, [
       "/root/a.ts",
       "/root/b.ts",
-    ]);
+    ], pathDisplayer);
 
     expect(text).toContain("- next turn: a.ts");
     expect(text).toContain("- next turn: b.ts");
@@ -512,7 +518,7 @@ describe("session file pin helpers", () => {
 
   it("builds pin manager items for direct removal", () => {
     expect(
-      buildPinManagerItems("/root", "/root/session.ts", ["/root/a.ts", "/root/b.ts"]),
+      buildPinManagerItems("/root", "/root/session.ts", ["/root/a.ts", "/root/b.ts"], pathDisplayer),
     ).toEqual([
       {
         id: "next-turn:/root/a.ts",
