@@ -1,5 +1,7 @@
 import path from "node:path";
 
+import fuzzysort from "fuzzysort";
+
 import { type Theme } from "@earendil-works/pi-coding-agent";
 import { Box, matchesKey, Text, type TUI } from "@earendil-works/pi-tui";
 
@@ -221,30 +223,35 @@ export class FileSearchModel {
   }
 
   private recompute(selectedPath = this.currentResult()?.fullPath): void {
-    const query = this.query.trim().toLowerCase();
-    this.results = this.trackedFiles
-      .map((file) => {
-        const score = scoreTrackedFile(file, query);
-        if (score === undefined) return undefined;
-        return {
-          fullPath: file.fullPath,
-          relativePath: file.relativePath,
-          score,
-        } satisfies SearchHit;
-      })
-      .filter((hit): hit is SearchHit => !!hit)
-      .sort(
-        (a, b) =>
-          b.score - a.score ||
-          a.relativePath.length - b.relativePath.length ||
-          a.relativePath.localeCompare(b.relativePath),
-      );
+    const query = this.query.trim();
+    this.results = query.length === 0
+      ? [...this.trackedFiles]
+          .sort((a, b) => a.relativePath.localeCompare(b.relativePath))
+          .map((file) => ({
+            fullPath: file.fullPath,
+            relativePath: file.relativePath,
+            score: 0,
+          }))
+      : fuzzysort
+          .go(query, this.trackedFiles, {
+            keys: SEARCH_KEYS,
+            scoreFn: (result) =>
+              Math.max((result[0]?.score ?? 0) + BASENAME_SCORE_BOOST, result[1]?.score ?? 0),
+          })
+          .map((result) => ({
+            fullPath: result.obj.fullPath,
+            relativePath: result.obj.relativePath,
+            score: result.score,
+          }));
 
     this.selected = findSearchIndex(this.results, selectedPath);
     this.scroll = Math.min(this.scroll, Math.max(0, this.results.length - 1));
     this.version += 1;
   }
 }
+
+const SEARCH_KEYS = ["baseName", "relativePath"] as const;
+const BASENAME_SCORE_BOOST = 0.2;
 
 type RenderCache = {
   key: string;
@@ -941,44 +948,6 @@ function findSearchIndex(results: SearchHit[], fullPath: string | undefined): nu
   if (!fullPath) return 0;
   const index = results.findIndex((result) => result.fullPath === fullPath);
   return index === -1 ? 0 : index;
-}
-
-function scoreTrackedFile(file: TrackedFile, query: string): number | undefined {
-  if (query.length === 0) return 0;
-
-  if (file.normalizedBaseName === query) return 700;
-  if (file.normalizedPath === query) return 650;
-  if (file.normalizedBaseName.startsWith(query)) {
-    return 600 - (file.normalizedBaseName.length - query.length);
-  }
-  if (file.normalizedPath.startsWith(query)) {
-    return 550 - (file.normalizedPath.length - query.length);
-  }
-
-  const baseIndex = file.normalizedBaseName.indexOf(query);
-  if (baseIndex !== -1) return 500 - baseIndex;
-
-  const pathIndex = file.normalizedPath.indexOf(query);
-  if (pathIndex !== -1) return 400 - pathIndex;
-
-  const gapPenalty = subsequenceGap(file.normalizedPath, query);
-  if (gapPenalty === undefined) return undefined;
-  return 250 - Math.min(200, gapPenalty);
-}
-
-function subsequenceGap(text: string, query: string): number | undefined {
-  let queryIndex = 0;
-  let lastMatch = -1;
-  let gap = 0;
-
-  for (let index = 0; index < text.length && queryIndex < query.length; index++) {
-    if (text[index] !== query[queryIndex]) continue;
-    if (lastMatch !== -1) gap += index - lastMatch - 1;
-    lastMatch = index;
-    queryIndex += 1;
-  }
-
-  return queryIndex === query.length ? gap : undefined;
 }
 
 function isPrintableInput(data: string): boolean {

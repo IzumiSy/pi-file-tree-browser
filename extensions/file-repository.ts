@@ -29,8 +29,6 @@ export type TrackedFile = {
   fullPath: string;
   relativePath: string;
   baseName: string;
-  normalizedPath: string;
-  normalizedBaseName: string;
 };
 
 const PREVIEW_HIGHLIGHT_BUFFER_LINES = 40;
@@ -217,8 +215,6 @@ export class FileRepository {
         fullPath: path.join(cwd, relativePath),
         relativePath,
         baseName: path.basename(relativePath),
-        normalizedPath: relativePath.toLowerCase(),
-        normalizedBaseName: path.basename(relativePath).toLowerCase(),
       }));
   }
 }

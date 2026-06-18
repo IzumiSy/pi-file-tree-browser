@@ -70,8 +70,6 @@ function tracked(relativePath: string): TrackedFile {
     fullPath: `/root/${relativePath}`,
     relativePath,
     baseName: relativePath.split("/").at(-1) ?? relativePath,
-    normalizedPath: relativePath.toLowerCase(),
-    normalizedBaseName: (relativePath.split("/").at(-1) ?? relativePath).toLowerCase(),
   };
 }
 
@@ -178,6 +176,31 @@ describe("FileSearchModel", () => {
 
     search.insert("r");
     expect(search.currentResult()?.relativePath).toBe("src/file-browser.ts");
+  });
+
+  it("matches abbreviations and typos", () => {
+    const files = new FakeFileRepository(
+      {},
+      {},
+      [
+        tracked("src/file-browser.ts"),
+        tracked("tests/file-browser.test.ts"),
+        tracked("README.md"),
+      ],
+    );
+
+    const search = new FileSearchModel("/root", files);
+
+    search.open();
+    search.insert("fbr");
+    expect(search.currentResult()?.relativePath).toBe("src/file-browser.ts");
+
+    search.query = "";
+    search.insert("brower");
+    expect(search.results.map((result) => result.relativePath)).toEqual([
+      "src/file-browser.ts",
+      "tests/file-browser.test.ts",
+    ]);
   });
 
   it("keeps the search selection visible while scrolling", () => {
