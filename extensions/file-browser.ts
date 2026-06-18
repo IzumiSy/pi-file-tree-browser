@@ -126,47 +126,50 @@ export class FileTreeModel {
 export class PreviewModel {
   previewPath: string | undefined;
   previewData: PreviewData | undefined;
-  previewLines: string[] | undefined;
   previewScroll = 0;
   previewPageStep = 1;
 
   constructor(private readonly files: FileRepository) {}
 
   isOpen(): boolean {
-    return !!this.previewPath && !!this.previewLines;
+    return !!this.previewPath && !!this.previewData;
   }
 
   open(fullPath: string): void {
-    const preview = this.files.readPreview(fullPath);
     this.previewPath = fullPath;
-    this.previewData = preview;
+    this.previewData = this.files.readPreview(fullPath);
     this.previewScroll = 0;
-    this.previewLines = this.files.renderPreviewLines(fullPath, preview);
   }
 
   close(): boolean {
-    if (!this.previewPath || !this.previewLines) return false;
+    if (!this.previewPath || !this.previewData) return false;
     this.previewPath = undefined;
     this.previewData = undefined;
-    this.previewLines = undefined;
     this.previewScroll = 0;
     this.previewPageStep = 1;
     return true;
   }
 
   scrollBy(delta: number): void {
-    if (!this.previewLines?.length) return;
+    if (!this.previewData?.fallbackLines.length) return;
     this.previewScroll = Math.max(0, this.previewScroll + delta);
   }
 
-  invalidate(): void {
-    if (this.previewPath && this.previewData) {
-      this.previewLines = this.files.renderPreviewLines(
-        this.previewPath,
-        this.previewData,
-      );
-    }
+  visibleLines(count: number): string[] {
+    if (!this.previewPath || !this.previewData) return [];
+    return this.files.renderPreviewLines(
+      this.previewPath,
+      this.previewData,
+      this.previewScroll,
+      count,
+    );
   }
+
+  lineCount(): number {
+    return this.previewData?.fallbackLines.length ?? 0;
+  }
+
+  invalidate(): void {}
 }
 
 export class FileViewerOverlay {
@@ -214,7 +217,7 @@ export class FileViewerOverlay {
     }
 
     if (matchesKey(data, "k")) {
-      if (this.preview.previewLines) {
+      if (this.preview.isOpen()) {
         this.preview.scrollBy(-1);
       } else {
         this.tree.move(-1);
@@ -224,7 +227,7 @@ export class FileViewerOverlay {
     }
 
     if (matchesKey(data, "j")) {
-      if (this.preview.previewLines) {
+      if (this.preview.isOpen()) {
         this.preview.scrollBy(1);
       } else {
         this.tree.move(1);
@@ -234,7 +237,7 @@ export class FileViewerOverlay {
     }
 
     if (matchesKey(data, "ctrl+u")) {
-      if (this.preview.previewLines) {
+      if (this.preview.isOpen()) {
         this.preview.scrollBy(-this.preview.previewPageStep);
         this.tui.requestRender();
       }
@@ -242,7 +245,7 @@ export class FileViewerOverlay {
     }
 
     if (matchesKey(data, "ctrl+d")) {
-      if (this.preview.previewLines) {
+      if (this.preview.isOpen()) {
         this.preview.scrollBy(this.preview.previewPageStep);
         this.tui.requestRender();
       }
@@ -315,7 +318,7 @@ export class FileViewerOverlay {
       ),
     );
 
-    if (!this.preview.previewPath || !this.preview.previewLines) {
+    if (!this.preview.isOpen()) {
       const visibleRows = this.tree.rows.slice(
         this.tree.scroll,
         this.tree.scroll + Math.max(1, bodyRows),
@@ -497,19 +500,12 @@ export class FileViewerOverlay {
   private renderPreviewPanel(width: number, height: number): string[] {
     const bodyHeight = Math.max(1, height);
     this.preview.previewPageStep = Math.max(1, Math.floor(bodyHeight / 2));
-    const maxScroll = Math.max(
-      0,
-      (this.preview.previewLines?.length ?? 0) - bodyHeight,
-    );
+    const maxScroll = Math.max(0, this.preview.lineCount() - bodyHeight);
     this.preview.previewScroll = Math.min(this.preview.previewScroll, maxScroll);
+    const lines = this.preview.visibleLines(bodyHeight);
 
-    return Array.from(
-      { length: bodyHeight },
-      (_, index) =>
-        this.theme.bg(
-          PREVIEW_BG,
-          fit(width, this.preview.previewLines?.[this.preview.previewScroll + index] ?? ""),
-        ),
+    return Array.from({ length: bodyHeight }, (_, index) =>
+      this.theme.bg(PREVIEW_BG, fit(width, lines[index] ?? "")),
     );
   }
 

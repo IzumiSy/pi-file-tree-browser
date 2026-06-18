@@ -17,7 +17,14 @@ export type PreviewData = {
   rawText?: string;
   fallbackLines: string[];
   highlight: boolean;
+  renderedWindow?: {
+    start: number;
+    end: number;
+    lines: string[];
+  };
 };
+
+const PREVIEW_HIGHLIGHT_BUFFER_LINES = 40;
 
 export class FileRepository {
   listEntries(dir: string): TreeEntry[] {
@@ -69,11 +76,39 @@ export class FileRepository {
     }
   }
 
-  renderPreviewLines(fullPath: string, preview: PreviewData): string[] {
-    if (!preview.highlight || !preview.rawText) return preview.fallbackLines;
+  renderPreviewLines(
+    fullPath: string,
+    preview: PreviewData,
+    start = 0,
+    count = preview.fallbackLines.length,
+  ): string[] {
+    const end = Math.min(preview.fallbackLines.length, start + count);
+    if (!preview.highlight || !preview.rawText) {
+      return preview.fallbackLines.slice(start, end);
+    }
 
+    const cached = preview.renderedWindow;
+    if (cached && start >= cached.start && end <= cached.end) {
+      return cached.lines.slice(start - cached.start, end - cached.start);
+    }
+
+    const bufferedStart = Math.max(0, start - PREVIEW_HIGHLIGHT_BUFFER_LINES);
+    const bufferedEnd = Math.min(
+      preview.fallbackLines.length,
+      end + PREVIEW_HIGHLIGHT_BUFFER_LINES,
+    );
     const language = getLanguageFromPath(fullPath);
-    return highlightCode(preview.rawText, language).map(ensureForegroundReset);
+    const lines = highlightCode(
+      preview.fallbackLines.slice(bufferedStart, bufferedEnd).join("\n"),
+      language,
+    ).map(ensureForegroundReset);
+
+    preview.renderedWindow = {
+      start: bufferedStart,
+      end: bufferedEnd,
+      lines,
+    };
+    return lines.slice(start - bufferedStart, end - bufferedStart);
   }
 
   readEditableText(fullPath: string): { kind: "binary" } | { kind: "text"; text: string } {

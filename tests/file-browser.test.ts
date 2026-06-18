@@ -22,9 +22,15 @@ class FakeFileRepository {
     );
   }
 
-  renderPreviewLines(_fullPath: string, preview: PreviewData): string[] {
-    if (!preview.rawText) return preview.fallbackLines;
-    return preview.rawText.split("\n").map((line) => `hl:${line}`);
+  renderPreviewLines(
+    _fullPath: string,
+    preview: PreviewData,
+    start = 0,
+    count = preview.fallbackLines.length,
+  ): string[] {
+    return preview.fallbackLines
+      .slice(start, start + count)
+      .map((line) => `hl:${line}`);
   }
 
   readEditableText(): { kind: "text"; text: string } {
@@ -133,13 +139,14 @@ describe("PreviewModel", () => {
 
     model.open("/root/file.ts");
     expect(model.isOpen()).toBe(true);
-    expect(model.previewLines).toEqual(["hl:one", "hl:two"]);
+    expect(model.visibleLines(2)).toEqual(["hl:one", "hl:two"]);
 
     model.scrollBy(5);
     expect(model.previewScroll).toBe(5);
+    expect(model.visibleLines(2)).toEqual([]);
 
     model.invalidate();
-    expect(model.previewLines).toEqual(["hl:one", "hl:two"]);
+    expect(model.visibleLines(2)).toEqual([]);
 
     expect(model.close()).toBe(true);
     expect(model.isOpen()).toBe(false);

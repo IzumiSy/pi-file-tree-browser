@@ -61,6 +61,31 @@ describe("FileRepository", () => {
     }
   });
 
+  it("renders only the requested preview window with a buffered cache", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "pi-files-"));
+
+    try {
+      const file = path.join(root, "large.ts");
+      writeFileSync(file, `${"const x = 1;\n".repeat(12000)}`);
+
+      const repo = new FileRepository();
+      const preview = repo.readPreview(file);
+      const lines = repo.renderPreviewLines(file, preview, 100, 3);
+      const cachedWindow = preview.renderedWindow;
+
+      expect(preview.highlight).toBe(true);
+      expect(lines).toHaveLength(3);
+      expect(lines.every((line) => line.endsWith("\x1b[39m"))).toBe(true);
+      expect(cachedWindow).toMatchObject({ start: 60, end: 143 });
+
+      const nearbyLines = repo.renderPreviewLines(file, preview, 101, 3);
+      expect(nearbyLines).toHaveLength(3);
+      expect(preview.renderedWindow).toBe(cachedWindow);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("returns relative paths inside cwd and absolute paths outside it", () => {
     const repo = new FileRepository();
     const cwd = "/tmp/project";
