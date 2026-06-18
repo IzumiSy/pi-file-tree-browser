@@ -29,6 +29,7 @@ export type TrackedFile = {
   fullPath: string;
   relativePath: string;
   baseName: string;
+  isDirectory: boolean;
 };
 
 const PREVIEW_HIGHLIGHT_BUFFER_LINES = 40;
@@ -208,14 +209,36 @@ export class FileRepository {
     });
     if (result.status !== 0 || typeof result.stdout !== "string") return [];
 
-    return result.stdout
+    const entries = new Map<string, TrackedFile>();
+
+    for (const relativePath of result.stdout
       .split("\0")
-      .filter((relativePath): relativePath is string => relativePath.length > 0)
-      .map((relativePath) => ({
+      .filter((value): value is string => value.length > 0)) {
+      entries.set(relativePath, {
         fullPath: path.join(cwd, relativePath),
         relativePath,
         baseName: path.basename(relativePath),
-      }));
+        isDirectory: false,
+      });
+
+      let directory = path.dirname(relativePath);
+      while (directory !== "." && directory !== "") {
+        if (!entries.has(directory)) {
+          entries.set(directory, {
+            fullPath: path.join(cwd, directory),
+            relativePath: directory,
+            baseName: path.basename(directory),
+            isDirectory: true,
+          });
+        }
+        directory = path.dirname(directory);
+      }
+    }
+
+    return [...entries.values()].sort((a, b) => {
+      if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+      return a.relativePath.localeCompare(b.relativePath);
+    });
   }
 }
 

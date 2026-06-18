@@ -33,6 +33,7 @@ export type SearchHit = {
   fullPath: string;
   relativePath: string;
   score: number;
+  isDirectory: boolean;
 };
 
 type BgColor = "selectedBg" | "customMessageBg" | "toolPendingBg";
@@ -51,7 +52,7 @@ const HELP_LINES = [
   "Enter      Open directory, preview file, then open editor",
   "",
   "Search",
-  "/          Search git-tracked files",
+  "/          Search tracked files + parent dirs",
   "Type       Filter while search is open",
   "Backspace  Delete search input",
   "Esc        Leave search or help",
@@ -219,6 +220,7 @@ export class FileSearchModel {
             fullPath: file.fullPath,
             relativePath: file.relativePath,
             score: 0,
+            isDirectory: file.isDirectory,
           }))
       : fuzzysort
           .go(query, this.trackedFiles, {
@@ -230,6 +232,7 @@ export class FileSearchModel {
             fullPath: result.obj.fullPath,
             relativePath: result.obj.relativePath,
             score: result.score,
+            isDirectory: result.obj.isDirectory,
           }));
 
     this.selected = findSearchIndex(this.results, selectedPath);
@@ -610,7 +613,7 @@ export class FileViewerOverlay {
     }
 
     if (matchesKey(data, "enter")) {
-      this.closeSearch(this.search.currentResult()?.fullPath);
+      this.closeSearch(this.search.currentResult());
       this.tui.requestRender();
       return true;
     }
@@ -649,13 +652,18 @@ export class FileViewerOverlay {
     this.helpScroll = 0;
   }
 
-  private closeSearch(revealPath?: string): void {
+  private closeSearch(revealHit?: SearchHit): void {
     this.search.close();
     this.mode = "tree";
     this.preview.close();
-    if (!revealPath) return;
-    this.revealInTree(revealPath);
-    this.preview.open(revealPath);
+    if (!revealHit) return;
+    if (revealHit.isDirectory) {
+      this.tree.treeRoot = revealHit.fullPath;
+      this.tree.reload();
+      return;
+    }
+    this.revealInTree(revealHit.fullPath);
+    this.preview.open(revealHit.fullPath);
   }
 
   private revealInTree(fullPath: string): void {
@@ -698,7 +706,10 @@ export class FileViewerOverlay {
   }
 
   private selectedFilePath(): string | undefined {
-    if (this.mode === "search") return this.search.currentResult()?.fullPath;
+    if (this.mode === "search") {
+      const result = this.search.currentResult();
+      return result && !result.isDirectory ? result.fullPath : undefined;
+    }
 
     const row = this.tree.currentRow();
     if (!row || row.isDirectory || row.fullPath.endsWith("#more")) return undefined;
@@ -738,8 +749,11 @@ export class FileViewerOverlay {
     selected: boolean,
   ): string {
     if (!hit) return this.theme.bg(FILE_TREE_BG, " ".repeat(width));
-    const marker = this.renderPinnedMarkers(hit.fullPath);
-    const content = `${hit.relativePath}${marker}`;
+    const marker = hit.isDirectory ? "" : this.renderPinnedMarkers(hit.fullPath);
+    const label = hit.isDirectory
+      ? this.theme.fg("accent", `${hit.relativePath}/`)
+      : hit.relativePath;
+    const content = `${label}${marker}`;
     const line = fit(width, selected ? this.theme.bold(content) : content);
     return this.theme.bg(selected ? FILE_SELECTION_BG : FILE_TREE_BG, line);
   }

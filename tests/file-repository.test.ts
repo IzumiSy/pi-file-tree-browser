@@ -94,7 +94,7 @@ describe("FileRepository", () => {
     }
   });
 
-  it("lists git-tracked files", () => {
+  it("lists tracked files and their parent directories", () => {
     const root = mkdtempSync(path.join(tmpdir(), "pi-files-"));
 
     try {
@@ -107,8 +107,14 @@ describe("FileRepository", () => {
 
       const repo = new FileRepository();
       expect(repo.listTrackedFiles(root).map((file) => file.relativePath)).toEqual([
+        "src",
         "src/nested.ts",
         "tracked.ts",
+      ]);
+      expect(repo.listTrackedFiles(root).map((file) => file.isDirectory)).toEqual([
+        true,
+        false,
+        false,
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });

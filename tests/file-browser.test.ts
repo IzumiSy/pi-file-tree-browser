@@ -71,11 +71,12 @@ function entry(fullPath: string, isDirectory: boolean): TreeEntry {
   };
 }
 
-function tracked(relativePath: string): TrackedFile {
+function tracked(relativePath: string, isDirectory = false): TrackedFile {
   return {
     fullPath: `/root/${relativePath}`,
     relativePath,
     baseName: relativePath.split("/").at(-1) ?? relativePath,
+    isDirectory,
   };
 }
 
@@ -143,7 +144,9 @@ describe("FileSearchModel", () => {
       {},
       {},
       [
+        tracked("src", true),
         tracked("src/file-browser.ts"),
+        tracked("tests", true),
         tracked("tests/file-browser.test.ts"),
         tracked("README.md"),
       ],
@@ -154,7 +157,9 @@ describe("FileSearchModel", () => {
     search.open();
     expect(search.results.map((result) => result.relativePath)).toEqual([
       "README.md",
+      "src",
       "src/file-browser.ts",
+      "tests",
       "tests/file-browser.test.ts",
     ]);
 
@@ -173,7 +178,9 @@ describe("FileSearchModel", () => {
       {},
       {},
       [
+        tracked("src", true),
         tracked("src/file-browser.ts"),
+        tracked("tests", true),
         tracked("tests/file-browser.test.ts"),
         tracked("README.md"),
       ],
@@ -191,6 +198,42 @@ describe("FileSearchModel", () => {
       "src/file-browser.ts",
       "tests/file-browser.test.ts",
     ]);
+  });
+
+  it("reveals directories from search without opening a preview", () => {
+    const files = new FakeFileRepository(
+      {
+        "/root": [entry("/root/src", true), entry("/root/README.md", false)],
+        "/root/src": [entry("/root/src/index.ts", false)],
+      },
+      {},
+      [tracked("src", true), tracked("src/index.ts")],
+    );
+
+    const overlay = new FileViewerOverlay(
+      "/root",
+      { requestRender() {}, terminal: { rows: 10 } } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as never,
+      files,
+      [],
+      undefined,
+      () => {},
+      () => {},
+    );
+
+    overlay.handleInput("/");
+    overlay.handleInput("s");
+    overlay.handleInput("r");
+    overlay.handleInput("c");
+    overlay.handleInput("\r");
+
+    expect((overlay as any).tree.treeRoot).toBe("/root/src");
+    expect((overlay as any).preview.isOpen()).toBe(false);
+    expect(overlay.render(40).join("\n")).toContain("index.ts");
   });
 
   it("keeps the search selection visible while scrolling", () => {
