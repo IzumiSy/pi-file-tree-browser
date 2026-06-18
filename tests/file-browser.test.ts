@@ -2,8 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   FileSearchModel,
   FileTreeModel,
+  FileViewerOverlay,
   PreviewModel,
 } from "../extensions/file-browser";
+import {
+  buildPinnedFileContextText,
+  readSessionContextPath,
+} from "../extensions/main";
 import type {
   PreviewData,
   TrackedFile,
@@ -250,5 +255,135 @@ describe("PreviewModel", () => {
     expect(model.close()).toBe(true);
     expect(model.isOpen()).toBe(false);
     expect(model.close()).toBe(false);
+  });
+});
+
+describe("FileViewerOverlay", () => {
+  it("pins the selected file into the session and closes on ctrl+s", () => {
+    const files = new FakeFileRepository({
+      "/root": [entry("/root/file.ts", false)],
+    });
+    const results: unknown[] = [];
+
+    const overlay = new FileViewerOverlay(
+      "/root",
+      { requestRender() {}, terminal: { rows: 20 } } as never,
+      {} as never,
+      files,
+      [],
+      undefined,
+      () => {},
+      (result) => {
+        results.push(result);
+      },
+    );
+
+    overlay.handleInput(String.fromCharCode(19));
+
+    expect(results).toEqual([{ kind: "session-pin", fullPath: "/root/file.ts" }]);
+  });
+
+  it("toggles multiple next-turn pins with s", () => {
+    const files = new FakeFileRepository({
+      "/root": [entry("/root/a.ts", false), entry("/root/b.ts", false)],
+    });
+    const committed: string[][] = [];
+
+    const overlay = new FileViewerOverlay(
+      "/root",
+      { requestRender() {}, terminal: { rows: 20 } } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as never,
+      files,
+      [],
+      undefined,
+      (paths) => {
+        committed.push(paths);
+      },
+      () => {},
+    );
+
+    overlay.handleInput("s");
+    overlay.handleInput("j");
+    overlay.handleInput("s");
+    const renderedPinned = overlay.render(80).join("\n");
+    expect(renderedPinned).toContain("a.ts ●");
+    expect(renderedPinned).toContain("b.ts ●");
+
+    overlay.handleInput("q");
+    expect(committed).toEqual([["/root/a.ts", "/root/b.ts"]]);
+  });
+
+  it("opens help in-place without overflowing the viewport and closes it cleanly", () => {
+    const files = new FakeFileRepository({
+      "/root": [entry("/root/a.ts", false), entry("/root/b.ts", false)],
+    });
+
+    const overlay = new FileViewerOverlay(
+      "/root",
+      { requestRender() {}, terminal: { rows: 10 } } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as never,
+      files,
+      [],
+      undefined,
+      () => {},
+      () => {},
+    );
+
+    overlay.handleInput("?");
+    const firstPage = overlay.render(24);
+    expect(firstPage.length).toBeLessThanOrEqual(10);
+    expect(firstPage.join("\n")).toContain("File browser help");
+
+    overlay.handleInput("j");
+    const scrolledPage = overlay.render(24).join("\n");
+    expect(scrolledPage).toContain("Navigation");
+    expect(scrolledPage).not.toContain("File browser help");
+
+    overlay.handleInput("?");
+    const rendered = overlay.render(80).join("\n");
+    expect(rendered).toContain("/root");
+    expect(rendered).not.toContain("File browser help");
+  });
+});
+
+describe("session file pin helpers", () => {
+  it("restores the latest session-pinned file", () => {
+    expect(
+      readSessionContextPath([
+        { type: "custom", customType: "files-session-context", data: { fullPath: "/root/a.ts" } },
+        { type: "custom", customType: "files-session-context", data: { fullPath: "/root/b.ts" } },
+      ]),
+    ).toBe("/root/b.ts");
+
+    expect(
+      readSessionContextPath([
+        { type: "custom", customType: "files-session-context", data: { fullPath: "/root/a.ts" } },
+        { type: "custom", customType: "files-session-context", data: { fullPath: undefined } },
+      ]),
+    ).toBeUndefined();
+  });
+
+  it("deduplicates session and next-turn pins in the prompt text", () => {
+    expect(
+      buildPinnedFileContextText("/root", "/root/file.ts", ["/root/file.ts"]),
+    ).toContain("- session + next turn: file.ts");
+  });
+
+  it("lists multiple next-turn pins in the prompt text", () => {
+    const text = buildPinnedFileContextText("/root", undefined, [
+      "/root/a.ts",
+      "/root/b.ts",
+    ]);
+
+    expect(text).toContain("- next turn: a.ts");
+    expect(text).toContain("- next turn: b.ts");
   });
 });

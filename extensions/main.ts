@@ -7,18 +7,40 @@ import { FileViewerOverlay, type FileViewerResult } from "./file-browser";
 import { FileRepository, fit } from "./file-repository";
 
 const files = new FileRepository();
-let pendingChatContextPath: string | undefined;
+const SESSION_CONTEXT_ENTRY = "files-session-context";
+let pendingChatContextPaths: string[] = [];
+let sessionChatContextPath: string | undefined;
+
+type SessionContextEntry = {
+  fullPath?: string;
+};
+
+type SessionEntryLike = {
+  type?: string;
+  customType?: string;
+  data?: unknown;
+};
 
 export default function (pi: ExtensionAPI) {
-  pi.on("before_agent_start", async (event, ctx) => {
-    if (!pendingChatContextPath) return;
+  pi.on("session_start", async (_event, ctx) => {
+    sessionChatContextPath = readSessionContextPath(ctx.sessionManager.getEntries());
+    updateChatContextWidget(ctx, sessionChatContextPath, pendingChatContextPaths);
+  });
 
-    const fullPath = pendingChatContextPath;
-    pendingChatContextPath = undefined;
-    updateChatContextWidget(ctx, undefined);
+  pi.on("before_agent_start", async (event, ctx) => {
+    const nextTurnPaths = pendingChatContextPaths;
+    pendingChatContextPaths = [];
+    updateChatContextWidget(ctx, sessionChatContextPath, pendingChatContextPaths);
+
+    const pinnedContext = buildPinnedFileContextText(
+      ctx.cwd,
+      sessionChatContextPath,
+      nextTurnPaths,
+    );
+    if (!pinnedContext) return;
 
     return {
-      systemPrompt: `${event.systemPrompt}\n\n## Pinned file context\nThe user pinned this file from the /files browser for this turn only. Treat it as high-priority context for this conversation. When relevant, read it first before answering questions or making changes.\n- ${files.displayPath(fullPath, ctx.cwd)}`,
+      systemPrompt: `${event.systemPrompt}\n\n${pinnedContext}`,
     };
   });
 
@@ -37,12 +59,11 @@ export default function (pi: ExtensionAPI) {
             tui,
             theme,
             files,
-            pendingChatContextPath,
-            (fullPath) => {
-              if (pendingChatContextPath === fullPath) return;
-
-              pendingChatContextPath = fullPath;
-              updateChatContextWidget(ctx, fullPath);
+            pendingChatContextPaths,
+            sessionChatContextPath,
+            (fullPaths) => {
+              pendingChatContextPaths = fullPaths;
+              updateChatContextWidget(ctx, sessionChatContextPath, fullPaths);
             },
             done,
           ),
@@ -59,30 +80,106 @@ export default function (pi: ExtensionAPI) {
 
       if (result?.kind === "edit") {
         await openFileEditor(ctx, result.fullPath);
+        return;
+      }
+
+      if (result?.kind === "session-pin") {
+        const nextSessionPath =
+          sessionChatContextPath === result.fullPath ? undefined : result.fullPath;
+        sessionChatContextPath = nextSessionPath;
+        pi.appendEntry(SESSION_CONTEXT_ENTRY, { fullPath: nextSessionPath });
+        updateChatContextWidget(ctx, sessionChatContextPath, pendingChatContextPaths);
+        ctx.ui.notify(
+          nextSessionPath
+            ? `Pinned in session: ${files.displayPath(nextSessionPath, ctx.cwd)}`
+            : "Cleared session-pinned file",
+          "info",
+        );
       }
     },
   });
 }
 
+export function readSessionContextPath(
+  entries: ReadonlyArray<SessionEntryLike>,
+): string | undefined {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (!entry) continue;
+    if (entry.type !== "custom" || entry.customType !== SESSION_CONTEXT_ENTRY) continue;
+
+    const data = entry.data;
+    if (!data || typeof data !== "object") return undefined;
+
+    const fullPath = (data as SessionContextEntry).fullPath;
+    return typeof fullPath === "string" && fullPath.length > 0 ? fullPath : undefined;
+  }
+
+  return undefined;
+}
+
+export function buildPinnedFileContextText(
+  cwd: string,
+  sessionPath: string | undefined,
+  nextTurnPaths: ReadonlyArray<string>,
+): string | undefined {
+  const labels = new Map<string, string[]>();
+
+  if (sessionPath) labels.set(sessionPath, ["session"]);
+  for (const nextTurnPath of nextTurnPaths) {
+    labels.set(nextTurnPath, [...(labels.get(nextTurnPath) ?? []), "next turn"]);
+  }
+
+  if (labels.size === 0) return undefined;
+
+  const lines = [...labels.entries()].map(([fullPath, scopes]) => {
+    const scope = scopes.join(" + ");
+    return `- ${scope}: ${files.displayPath(fullPath, cwd)}`;
+  });
+
+  return [
+    "## Pinned file context",
+    "Treat these pinned files as high-priority context for this conversation. When relevant, read them before answering questions or making changes.",
+    ...lines,
+  ].join("\n");
+}
+
 function updateChatContextWidget(
   ctx: ExtensionContext,
-  fullPath: string | undefined,
+  sessionPath: string | undefined,
+  nextTurnPaths: ReadonlyArray<string>,
 ): void {
   if (!ctx.hasUI) return;
 
-  if (!fullPath) {
+  if (!sessionPath && nextTurnPaths.length === 0) {
     ctx.ui.setWidget("files-chat-context", undefined);
     return;
   }
 
-  const filePath = files.displayPath(fullPath, ctx.cwd);
   ctx.ui.setWidget("files-chat-context", (_tui, theme) => ({
-    render: (width: number) => [
-      fitWidgetLine(
-        width,
-        `${theme.fg("muted", "Pinned next-turn file:")} ${theme.fg("accent", filePath)}`,
-      ),
-    ],
+    render: (width: number) => {
+      const lines: string[] = [];
+
+      if (sessionPath) {
+        lines.push(
+          fitWidgetLine(
+            width,
+            `${theme.fg("muted", "Pinned session file:")} ${theme.fg("accent", files.displayPath(sessionPath, ctx.cwd))}`,
+          ),
+        );
+      }
+
+      if (nextTurnPaths.length > 0) {
+        lines.push(
+          fitWidgetLine(
+            width,
+            `${theme.fg("muted", "Pinned next-turn files:")} ${theme.fg("accent", nextTurnPaths.map((fullPath) => files.displayPath(fullPath, ctx.cwd)).join(", "))}`,
+          ),
+        );
+      }
+
+      return lines;
+    },
     invalidate(): void {},
   }));
 }
