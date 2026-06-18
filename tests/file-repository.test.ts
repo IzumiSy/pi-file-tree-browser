@@ -43,6 +43,24 @@ describe("FileRepository", () => {
     }
   });
 
+  it("resets foreground color on every highlighted preview line", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "pi-files-"));
+
+    try {
+      const file = path.join(root, "comment.ts");
+      writeFileSync(file, "/*\ncomment\n*/\nconst x = 1;\n");
+
+      const repo = new FileRepository();
+      const preview = repo.readPreview(file);
+      const lines = repo.renderPreviewLines(file, preview);
+
+      expect(lines).toHaveLength(5);
+      expect(lines.every((line) => line.endsWith("\x1b[39m"))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("returns relative paths inside cwd and absolute paths outside it", () => {
     const repo = new FileRepository();
     const cwd = "/tmp/project";

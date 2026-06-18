@@ -5,6 +5,8 @@ import path from "node:path";
 import { getLanguageFromPath, highlightCode } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
+const FG_RESET = "\x1b[39m";
+
 export type TreeEntry = {
   name: string;
   fullPath: string;
@@ -71,7 +73,7 @@ export class FileRepository {
     if (!preview.highlight || !preview.rawText) return preview.fallbackLines;
 
     const language = getLanguageFromPath(fullPath);
-    return highlightCode(preview.rawText, language);
+    return highlightCode(preview.rawText, language).map(ensureForegroundReset);
   }
 
   readEditableText(fullPath: string): { kind: "binary" } | { kind: "text"; text: string } {
@@ -101,6 +103,10 @@ export class FileRepository {
 export function fit(width: number, text: string): string {
   const clipped = truncateToWidth(text, width, "", true);
   return clipped + " ".repeat(Math.max(0, width - visibleWidth(clipped)));
+}
+
+function ensureForegroundReset(line: string): string {
+  return line.endsWith(FG_RESET) ? line : `${line}${FG_RESET}`;
 }
 
 function sortEntries<T extends { name: string; isDirectory: boolean }>(
