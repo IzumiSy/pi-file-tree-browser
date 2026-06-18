@@ -2,16 +2,12 @@
   "name": "pi-file-tree-browser",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
   "scripts": {
     "type-check": "tsc -b --noEmit",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "test": "vitest run"
   },
   "files": [
-    "extensions/",
-    "README.md",
-    "LICENSE"
+    "extensions/"
   ],
   "keywords": [],
   "author": "IzumiSy",
