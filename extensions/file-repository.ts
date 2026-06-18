@@ -25,8 +25,13 @@ export type PreviewData = {
 };
 
 const PREVIEW_HIGHLIGHT_BUFFER_LINES = 40;
+const PREVIEW_HIGHLIGHT_CONTEXT_LINES = 20;
 
 export class FileRepository {
+  constructor(
+    private readonly renderHighlighted: (code: string, language?: string) => string[] =
+      highlightCode,
+  ) {}
   listEntries(dir: string): TreeEntry[] {
     try {
       return sortEntries(
@@ -87,28 +92,72 @@ export class FileRepository {
       return preview.fallbackLines.slice(start, end);
     }
 
-    const cached = preview.renderedWindow;
-    if (cached && start >= cached.start && end <= cached.end) {
-      return cached.lines.slice(start - cached.start, end - cached.start);
-    }
-
     const bufferedStart = Math.max(0, start - PREVIEW_HIGHLIGHT_BUFFER_LINES);
     const bufferedEnd = Math.min(
       preview.fallbackLines.length,
       end + PREVIEW_HIGHLIGHT_BUFFER_LINES,
     );
+    const cached = preview.renderedWindow;
+    if (cached && bufferedStart >= cached.start && bufferedEnd <= cached.end) {
+      return cached.lines.slice(bufferedStart - cached.start, bufferedEnd - cached.start).slice(
+        start - bufferedStart,
+        end - bufferedStart,
+      );
+    }
+
     const language = getLanguageFromPath(fullPath);
-    const lines = highlightCode(
-      preview.fallbackLines.slice(bufferedStart, bufferedEnd).join("\n"),
+    let next = cached;
+
+    if (!next || bufferedEnd <= next.start || bufferedStart >= next.end) {
+      next = {
+        start: bufferedStart,
+        end: bufferedEnd,
+        lines: this.highlightSegment(preview, bufferedStart, bufferedEnd, language),
+      };
+    } else {
+      if (bufferedStart < next.start) {
+        const segmentEnd = Math.min(next.start + PREVIEW_HIGHLIGHT_CONTEXT_LINES, bufferedEnd);
+        const prefix = this.highlightSegment(preview, bufferedStart, segmentEnd, language);
+        next = {
+          start: bufferedStart,
+          end: next.end,
+          lines: prefix.concat(next.lines.slice(segmentEnd - next.start)),
+        };
+      }
+
+      if (bufferedEnd > next.end) {
+        const segmentStart = Math.max(next.end - PREVIEW_HIGHLIGHT_CONTEXT_LINES, bufferedStart);
+        const suffix = this.highlightSegment(preview, segmentStart, bufferedEnd, language);
+        next = {
+          start: next.start,
+          end: bufferedEnd,
+          lines: next.lines.slice(0, segmentStart - next.start).concat(suffix),
+        };
+      }
+
+      if (next.start < bufferedStart || next.end > bufferedEnd) {
+        next = {
+          start: bufferedStart,
+          end: bufferedEnd,
+          lines: next.lines.slice(bufferedStart - next.start, bufferedEnd - next.start),
+        };
+      }
+    }
+
+    preview.renderedWindow = next;
+    return next.lines.slice(start - next.start, end - next.start);
+  }
+
+  private highlightSegment(
+    preview: PreviewData,
+    start: number,
+    end: number,
+    language: string | undefined,
+  ): string[] {
+    return this.renderHighlighted(
+      preview.fallbackLines.slice(start, end).join("\n"),
       language,
     ).map(ensureForegroundReset);
-
-    preview.renderedWindow = {
-      start: bufferedStart,
-      end: bufferedEnd,
-      lines,
-    };
-    return lines.slice(start - bufferedStart, end - bufferedStart);
   }
 
   readEditableText(fullPath: string): { kind: "binary" } | { kind: "text"; text: string } {

@@ -5,6 +5,16 @@ import { Box, matchesKey, Text, type TUI } from "@earendil-works/pi-tui";
 
 import { type FileRepository, fit, type PreviewData } from "./file-repository";
 
+type FileRepositoryLike = Pick<
+  FileRepository,
+  | "listEntries"
+  | "readPreview"
+  | "renderPreviewLines"
+  | "readEditableText"
+  | "writeText"
+  | "displayPath"
+>;
+
 export type TreeRow = {
   fullPath: string;
   label: string;
@@ -33,7 +43,7 @@ export class FileTreeModel {
 
   constructor(
     private readonly cwd: string,
-    private readonly files: FileRepository,
+    private readonly files: FileRepositoryLike,
   ) {
     this.treeRoot = cwd;
     this.expandedPaths.add(cwd);
@@ -147,7 +157,7 @@ export class PreviewModel {
   previewScroll = 0;
   previewPageStep = 1;
 
-  constructor(private readonly files: FileRepository) {}
+  constructor(private readonly files: FileRepositoryLike) {}
 
   isOpen(): boolean {
     return !!this.previewPath && !!this.previewData;
@@ -201,7 +211,7 @@ export class FileViewerOverlay {
     cwd: string,
     private readonly tui: TUI,
     private readonly theme: Theme,
-    files: FileRepository,
+    files: FileRepositoryLike,
     private chatContextPath: string | undefined,
     private readonly commitChatContextPath: (fullPath: string | undefined) => void,
     private readonly done: (result: FileViewerResult) => void,
@@ -524,7 +534,7 @@ export class FileViewerOverlay {
 function buildTreeRows(
   root: string,
   expandedPaths: ReadonlySet<string>,
-  files: FileRepository,
+  files: FileRepositoryLike,
 ): TreeRow[] {
   const rows: TreeRow[] = [];
   const entries = files.listEntries(root);
