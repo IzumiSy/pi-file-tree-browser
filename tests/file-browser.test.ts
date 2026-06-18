@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-
-import { FileTreeModel, PreviewModel } from "./file-browser";
-import type { PreviewData, TreeEntry } from "./file-repository";
+import { FileTreeModel, PreviewModel } from "../extensions/file-browser";
+import type { PreviewData, TreeEntry } from "../extensions/file-repository";
 
 class FakeFileRepository {
   constructor(
@@ -14,11 +13,13 @@ class FakeFileRepository {
   }
 
   readPreview(fullPath: string): PreviewData {
-    return this.previews[fullPath] ?? {
-      rawText: "first\nsecond",
-      fallbackLines: ["first", "second"],
-      highlight: true,
-    };
+    return (
+      this.previews[fullPath] ?? {
+        rawText: "first\nsecond",
+        fallbackLines: ["first", "second"],
+        highlight: true,
+      }
+    );
   }
 
   renderPreviewLines(_fullPath: string, preview: PreviewData): string[] {

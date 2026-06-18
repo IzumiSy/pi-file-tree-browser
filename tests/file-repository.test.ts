@@ -1,10 +1,8 @@
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-
 import { describe, expect, it } from "vitest";
-
-import { FileRepository } from "./file-repository";
+import { FileRepository } from "../extensions/file-repository";
 
 describe("FileRepository", () => {
   it("lists directories before files", () => {
@@ -49,7 +47,11 @@ describe("FileRepository", () => {
     const repo = new FileRepository();
     const cwd = "/tmp/project";
 
-    expect(repo.displayPath("/tmp/project/src/index.ts", cwd)).toBe("src/index.ts");
-    expect(repo.displayPath("/tmp/other/index.ts", cwd)).toBe("/tmp/other/index.ts");
+    expect(repo.displayPath("/tmp/project/src/index.ts", cwd)).toBe(
+      "src/index.ts",
+    );
+    expect(repo.displayPath("/tmp/other/index.ts", cwd)).toBe(
+      "/tmp/other/index.ts",
+    );
   });
 });
