@@ -393,19 +393,22 @@ describe("session file pin helpers", () => {
       buildPinManagerItems("/root", "/root/session.ts", ["/root/a.ts", "/root/b.ts"]),
     ).toEqual([
       {
-        value: "next-turn:/root/a.ts",
+        id: "next-turn:/root/a.ts",
         label: "a.ts",
-        description: "Enter to remove",
+        currentValue: "keep",
+        values: ["keep", "remove"],
       },
       {
-        value: "next-turn:/root/b.ts",
+        id: "next-turn:/root/b.ts",
         label: "b.ts",
-        description: "Enter to remove",
+        currentValue: "keep",
+        values: ["keep", "remove"],
       },
       {
-        value: "session:/root/session.ts",
+        id: "session:/root/session.ts",
         label: "session.ts",
-        description: "Enter to remove",
+        currentValue: "keep",
+        values: ["keep", "remove"],
       },
     ]);
   });

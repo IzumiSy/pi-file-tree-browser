@@ -1,13 +1,14 @@
 import {
   DynamicBorder,
+  getSettingsListTheme,
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import {
   Container,
   matchesKey,
-  type SelectItem,
-  SelectList,
+  type SettingItem,
+  SettingsList,
   Text,
 } from "@earendil-works/pi-tui";
 
@@ -29,9 +30,10 @@ type SessionEntryLike = {
   data?: unknown;
 };
 
-type PinManagerAction =
-  | { kind: "remove-next-turn"; fullPath: string }
-  | { kind: "remove-session"; fullPath: string };
+type PinManagerState = {
+  sessionPath: string | undefined;
+  nextTurnPaths: string[];
+};
 
 export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
@@ -124,32 +126,14 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      while (sessionChatContextPath || pendingChatContextPaths.length > 0) {
-        const action = await showPinManagerDialog(ctx);
-        if (!action) return;
+      const nextState = await showPinManagerDialog(ctx);
+      if (!nextState) return;
 
-        switch (action.kind) {
-          case "remove-next-turn":
-            pendingChatContextPaths = pendingChatContextPaths.filter(
-              (fullPath) => fullPath !== action.fullPath,
-            );
-            updateChatContextWidget(ctx, sessionChatContextPath, pendingChatContextPaths);
-            ctx.ui.notify(
-              `Unpinned next-turn file: ${files.displayPath(action.fullPath, ctx.cwd)}`,
-              "info",
-            );
-            break;
-          case "remove-session":
-            sessionChatContextPath = undefined;
-            pi.appendEntry(SESSION_CONTEXT_ENTRY, { fullPath: undefined });
-            updateChatContextWidget(ctx, sessionChatContextPath, pendingChatContextPaths);
-            ctx.ui.notify(
-              `Cleared session pin: ${files.displayPath(action.fullPath, ctx.cwd)}`,
-              "info",
-            );
-            break;
-        }
-      }
+      pendingChatContextPaths = nextState.nextTurnPaths;
+      sessionChatContextPath = nextState.sessionPath;
+      pi.appendEntry(SESSION_CONTEXT_ENTRY, { fullPath: sessionChatContextPath });
+      updateChatContextWidget(ctx, sessionChatContextPath, pendingChatContextPaths);
+      ctx.ui.notify("Updated pinned files", "info");
     },
   });
 }
@@ -202,69 +186,69 @@ export function buildPinManagerItems(
   cwd: string,
   sessionPath: string | undefined,
   nextTurnPaths: ReadonlyArray<string>,
-): SelectItem[] {
-  const items: SelectItem[] = [];
+): SettingItem[] {
+  const items: SettingItem[] = [];
 
   for (const fullPath of nextTurnPaths) {
     items.push({
-      value: `next-turn:${fullPath}`,
+      id: `next-turn:${fullPath}`,
       label: files.displayPath(fullPath, cwd),
-      description: "Enter to remove",
+      currentValue: "keep",
+      values: ["keep", "remove"],
     });
   }
 
   if (sessionPath) {
     items.push({
-      value: `session:${sessionPath}`,
+      id: `session:${sessionPath}`,
       label: files.displayPath(sessionPath, cwd),
-      description: "Enter to remove",
+      currentValue: "keep",
+      values: ["keep", "remove"],
     });
   }
 
   return items;
 }
 
-function parsePinManagerAction(value: string): PinManagerAction | undefined {
-  if (value.startsWith("next-turn:")) {
-    return { kind: "remove-next-turn", fullPath: value.slice("next-turn:".length) };
-  }
-
-  if (value.startsWith("session:")) {
-    return { kind: "remove-session", fullPath: value.slice("session:".length) };
-  }
-
-  return undefined;
-}
-
 async function showPinManagerDialog(
   ctx: ExtensionContext,
-): Promise<PinManagerAction | undefined> {
-  const items = buildPinManagerItems(
-    ctx.cwd,
-    sessionChatContextPath,
-    pendingChatContextPaths,
-  );
+): Promise<PinManagerState | undefined> {
+  let sessionPath = sessionChatContextPath;
+  let nextTurnPaths = [...pendingChatContextPaths];
+  const items = buildPinManagerItems(ctx.cwd, sessionPath, nextTurnPaths);
 
   if (items.length === 0) return undefined;
 
-  const result = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+  return ctx.ui.custom<PinManagerState | undefined>((tui, theme, _kb, done) => {
     const container = new Container();
     container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
-    container.addChild(new Text(theme.fg("accent", theme.bold("Remove pinned file")), 1, 0));
+    container.addChild(new Text(theme.fg("accent", theme.bold("Pinned files")), 1, 0));
 
-    const selectList = new SelectList(items, Math.min(items.length, 8), {
-      selectedPrefix: (text) => theme.fg("accent", text),
-      selectedText: (text) => theme.fg("accent", text),
-      description: (text) => theme.fg("muted", text),
-      scrollInfo: (text) => theme.fg("dim", text),
-      noMatch: (text) => theme.fg("warning", text),
-    });
+    const settingsList = new SettingsList(
+      items,
+      Math.min(items.length + 2, 10),
+      getSettingsListTheme(),
+      (id, newValue) => {
+        if (id.startsWith("next-turn:")) {
+          const fullPath = id.slice("next-turn:".length);
+          nextTurnPaths = newValue === "keep"
+            ? ensurePath(nextTurnPaths, fullPath)
+            : nextTurnPaths.filter((path) => path !== fullPath);
+          return;
+        }
 
-    selectList.onSelect = (item) => done(item.value);
-    selectList.onCancel = () => done(null);
+        if (id.startsWith("session:")) {
+          const fullPath = id.slice("session:".length);
+          sessionPath = newValue === "keep" ? fullPath : undefined;
+        }
+      },
+      () => {
+        done({ sessionPath, nextTurnPaths });
+      },
+    );
 
-    container.addChild(selectList);
-    container.addChild(new Text(theme.fg("dim", "↑↓ navigate • enter remove • esc/q cancel"), 1, 0));
+    container.addChild(settingsList);
+    container.addChild(new Text(theme.fg("dim", "↑↓ navigate • enter keep/remove • esc/q done"), 1, 0));
     container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
 
     return {
@@ -276,16 +260,31 @@ async function showPinManagerDialog(
       },
       handleInput(data: string) {
         if (matchesKey(data, "q")) {
-          done(null);
+          done({ sessionPath, nextTurnPaths });
           return;
         }
-        selectList.handleInput(data);
+        if (matchesKey(data, "left") || matchesKey(data, "right")) {
+          return;
+        }
+        if (matchesKey(data, "j")) {
+          settingsList.handleInput("\x1b[B");
+          tui.requestRender();
+          return;
+        }
+        if (matchesKey(data, "k")) {
+          settingsList.handleInput("\x1b[A");
+          tui.requestRender();
+          return;
+        }
+        settingsList.handleInput(data);
         tui.requestRender();
       },
     };
   });
+}
 
-  return result ? parsePinManagerAction(result) : undefined;
+function ensurePath(paths: ReadonlyArray<string>, fullPath: string): string[] {
+  return paths.includes(fullPath) ? [...paths] : [...paths, fullPath];
 }
 
 function updateChatContextWidget(
