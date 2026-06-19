@@ -67,15 +67,16 @@ const HELP_LINES = [
   "l / →      Open directory or preview file",
   "Enter      Open directory, preview file, then open editor",
   "",
+  "Pins",
+  "Ctrl+S     Toggle next-turn pin for whole file",
+  "s          Toggle next-turn pin for current file or preview selection",
+  "v          Mark preview range start/end, or remove pinned hunk",
+  "",
   "Search",
   "/          Search tracked files, or search inside previewed file",
   "Type       Filter while search is open",
   "Backspace  Delete search input",
   "Esc        Leave search/help or clear preview selection",
-  "",
-  "Pins",
-  "s          Toggle next-turn pin for file or preview selection",
-  "v          Mark preview range start/end, or remove pinned hunk",
   "",
   "Preview",
   "Ctrl+U/D   Move preview cursor by half a page",
@@ -83,7 +84,6 @@ const HELP_LINES = [
   "q          Close preview or browser",
   "r          Reload directory",
   "Ctrl+C     Cancel current mode/selection",
-  "",
   "Press ? again to close this help.",
 ] as const;
 
@@ -777,6 +777,12 @@ export class FileViewerOverlay {
       return;
     }
 
+    if (matchesKey(data, "ctrl+s")) {
+      this.toggleWholeFileContextPin();
+      this.tui.requestRender();
+      return;
+    }
+
     if (matchesKey(data, "s")) {
       this.toggleSelectedContextPin();
       this.tui.requestRender();
@@ -1072,12 +1078,37 @@ export class FileViewerOverlay {
     };
   }
 
+  private toggleWholeFileContextPin(): void {
+    const pin = this.selectedFilePin();
+    if (!pin) return;
+
+    this.chatContextPins = togglePinnedPin(this.chatContextPins, pin);
+    this.preview.clearSelection();
+  }
+
   private toggleSelectedContextPin(): void {
     const pin = this.selectedPin();
     if (!pin) return;
 
     this.chatContextPins = togglePinnedPin(this.chatContextPins, pin);
     this.preview.clearSelection();
+  }
+
+  private selectedFilePin(): ContextPin | undefined {
+    if (this.mode === "search") {
+      const result = this.search.currentResult();
+      return result && !result.isDirectory
+        ? { kind: "file", fullPath: result.fullPath }
+        : undefined;
+    }
+
+    if (this.preview.previewPath) {
+      return { kind: "file", fullPath: this.preview.previewPath };
+    }
+
+    const row = this.tree.currentRow();
+    if (!row || row.isDirectory || row.fullPath.endsWith("#more")) return undefined;
+    return { kind: "file", fullPath: row.fullPath };
   }
 
   private selectedPin(): ContextPin | undefined {
@@ -1253,13 +1284,15 @@ export class FileViewerOverlay {
     const lineCount = this.preview.lineCount();
     const gutterWidth = Math.max(1, `${Math.max(1, lineCount)}`.length);
     const selectedRange = this.preview.selectedRange();
+    const showRangeSelection = this.preview.selectionAnchor !== undefined;
     const visibleLines = this.preview.visibleLines(bodyHeight);
     const lines: string[] = [];
 
     for (let index = 0; index < bodyHeight; index += 1) {
       const lineIndex = this.preview.previewScroll + index;
       const lineNumber = lineIndex < lineCount ? lineIndex + 1 : undefined;
-      const inRange = !!selectedRange
+      const inRange = showRangeSelection
+        && !!selectedRange
         && lineIndex >= selectedRange.start
         && lineIndex <= selectedRange.end;
       lines.push(

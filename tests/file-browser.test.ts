@@ -755,7 +755,7 @@ describe("FileViewerOverlay", () => {
     expect((overlay as any).tree.currentRow()?.fullPath).toBe("/root/a.ts");
   });
 
-  it("toggles multiple next-turn pins with s", () => {
+  it("toggles multiple next-turn pins with ctrl+s and s", () => {
     const files = new FakeFileRepository({
       "/root": [entry("/root/a.ts", false), entry("/root/b.ts", false)],
     });
@@ -778,7 +778,7 @@ describe("FileViewerOverlay", () => {
       () => {},
     );
 
-    overlay.handleInput("s");
+    overlay.handleInput(String.fromCharCode(19));
     overlay.handleInput("j");
     overlay.handleInput("s");
     const renderedPinned = overlay.render(80).join("\n");
@@ -787,6 +787,49 @@ describe("FileViewerOverlay", () => {
 
     overlay.handleInput("q");
     expect(committed).toEqual([[filePin("/root/a.ts"), filePin("/root/b.ts")]]);
+  });
+
+  it("uses ctrl+s in preview to pin the whole file instead of a hunk", () => {
+    const files = new FakeFileRepository(
+      {
+        "/root": [entry("/root/file.ts", false)],
+      },
+      {
+        "/root/file.ts": {
+          rawText: "first\nsecond\nthird",
+          fallbackLines: ["first", "second", "third"],
+          highlight: true,
+        },
+      },
+    );
+    const committed: ContextPin[][] = [];
+
+    const overlay = new FileViewerOverlay(
+      "/root",
+      { requestRender() {}, terminal: { rows: 20 } } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as never,
+      files,
+      [],
+      undefined,
+      (pins: ContextPin[]) => {
+        committed.push(pins);
+      },
+      () => {},
+    );
+
+    overlay.handleInput("\r");
+    overlay.handleInput("j");
+    overlay.handleInput("v");
+    overlay.handleInput("j");
+    overlay.handleInput(String.fromCharCode(19));
+    overlay.handleInput("q");
+    overlay.handleInput("q");
+
+    expect(committed).toEqual([[filePin("/root/file.ts")]]);
   });
 
   it("keeps the tree pane in a stable split layout before and after preview opens", () => {
@@ -873,6 +916,7 @@ describe("FileViewerOverlay", () => {
     const firstPage = overlay.render(24);
     expect(firstPage.length).toBeLessThanOrEqual(10);
     expect(firstPage.join("\n")).toContain("File browser help");
+    expect(firstPage.join("\n")).toContain("Navigation");
 
     overlay.handleInput("j");
     const scrolledPage = overlay.render(24).join("\n");
