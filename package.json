@@ -1,7 +1,7 @@
 {
   "name": "@izumisy/pi-file-tree-browser",
   "version": "0.1.0",
-  "description": "",
+  "description": "A pi TUI file browser extension.",
   "scripts": {
     "dev": "pi -e extensions/main.ts",
     "type-check": "tsc -b --noEmit",

@@ -1,6 +1,6 @@
 # pi-file-tree-browser
 
-A pi TUI extension that adds a file tree browser and context pinning.
+A pi TUI file browser extension.
 
 ## Features
 
