@@ -1,171 +1,157 @@
 import type { SettingItem } from "@earendil-works/pi-tui";
 
-export const SESSION_CONTEXT_ENTRY = "files-session-context";
-
 type PathDisplayer = {
   displayPath(fullPath: string, cwd: string): string;
 };
 
-export type SessionContextEntry = {
-  fullPath?: string;
+export type FileContextPin = {
+  kind: "file";
+  fullPath: string;
 };
 
-export type SessionEntryLike = {
-  type?: string;
-  customType?: string;
-  data?: unknown;
+export type RangeContextPin = {
+  kind: "range";
+  fullPath: string;
+  startLine: number;
+  endLine: number;
+  snapshot: string;
 };
+
+export type ContextPin = FileContextPin | RangeContextPin;
 
 export type PinManagerState = {
-  sessionPath: string | undefined;
-  nextTurnPaths: string[];
+  nextTurnPins: ContextPin[];
 };
 
-export type PinScope = "session" | "next-turn";
-
-export type PinnedFileView = {
-  fullPath: string;
+export type PinnedContextView = {
+  key: string;
+  pin: ContextPin;
   displayPath: string;
-};
-
-export type PinnedFileDescriptor = PinnedFileView & {
-  scopes: PinScope[];
+  displayLabel: string;
 };
 
 export type PinnedFilesState = {
-  session: PinnedFileView | undefined;
-  nextTurn: PinnedFileView[];
-  combined: PinnedFileDescriptor[];
+  nextTurn: PinnedContextView[];
 };
-
-export function readSessionContextPath(
-  entries: ReadonlyArray<SessionEntryLike>,
-): string | undefined {
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    const entry = entries[index];
-    if (!entry) continue;
-    if (entry.type !== "custom" || entry.customType !== SESSION_CONTEXT_ENTRY) continue;
-
-    const data = entry.data;
-    if (!data || typeof data !== "object") return undefined;
-
-    const fullPath = (data as SessionContextEntry).fullPath;
-    return typeof fullPath === "string" && fullPath.length > 0 ? fullPath : undefined;
-  }
-
-  return undefined;
-}
 
 export function describePinnedFiles(
   cwd: string,
-  sessionPath: string | undefined,
-  nextTurnPaths: ReadonlyArray<string>,
+  nextTurnPins: ReadonlyArray<ContextPin>,
   files: PathDisplayer,
 ): PinnedFilesState {
-  const session = sessionPath
-    ? { fullPath: sessionPath, displayPath: files.displayPath(sessionPath, cwd) }
-    : undefined;
-  const nextTurn = nextTurnPaths.map((fullPath) => ({
-    fullPath,
-    displayPath: files.displayPath(fullPath, cwd),
-  }));
-  const combined = new Map<string, PinnedFileDescriptor>();
+  const nextTurn = new Map<string, PinnedContextView>();
 
-  if (session) {
-    combined.set(session.fullPath, { ...session, scopes: ["session"] });
-  }
-
-  for (const pinned of nextTurn) {
-    const existing = combined.get(pinned.fullPath);
-    if (existing) {
-      if (!existing.scopes.includes("next-turn")) {
-        existing.scopes = [...existing.scopes, "next-turn"];
-      }
-      continue;
-    }
-
-    combined.set(pinned.fullPath, { ...pinned, scopes: ["next-turn"] });
+  for (const pin of nextTurnPins) {
+    const view = describeContextPin(pin, cwd, files);
+    nextTurn.set(view.key, view);
   }
 
   return {
-    session,
-    nextTurn,
-    combined: [...combined.values()],
+    nextTurn: [...nextTurn.values()],
   };
 }
 
 export function buildPinnedFileContextText(
   cwd: string,
-  sessionPath: string | undefined,
-  nextTurnPaths: ReadonlyArray<string>,
+  nextTurnPins: ReadonlyArray<ContextPin>,
   files: PathDisplayer,
 ): string | undefined {
-  const pinned = describePinnedFiles(cwd, sessionPath, nextTurnPaths, files);
-  if (pinned.combined.length === 0) return undefined;
+  const pinned = describePinnedFiles(cwd, nextTurnPins, files);
+  if (pinned.nextTurn.length === 0) return undefined;
 
-  const lines = pinned.combined.map(({ displayPath, scopes }) => {
-    const scope = scopes.map(formatScope).join(" + ");
-    return `- ${scope}: ${displayPath}`;
-  });
-
-  return [
+  const lines = [
     "## Pinned file context",
-    "Treat these pinned files as high-priority context for this conversation. When relevant, read them before answering questions or making changes.",
-    ...lines,
-  ].join("\n");
+    "Treat these pinned files and snippets as high-priority context for this conversation. When relevant, read them before answering questions or making changes.",
+  ];
+
+  for (const { pin, displayLabel } of pinned.nextTurn) {
+    if (pin.kind === "file") {
+      lines.push(`- next turn file: ${displayLabel}`);
+      continue;
+    }
+
+    lines.push(`- next turn snippet: ${displayLabel}`);
+    lines.push("```");
+    lines.push(formatSnapshot(pin));
+    lines.push("```");
+  }
+
+  return lines.join("\n");
 }
 
 export function buildPinManagerItems(
   cwd: string,
-  sessionPath: string | undefined,
-  nextTurnPaths: ReadonlyArray<string>,
+  nextTurnPins: ReadonlyArray<ContextPin>,
   files: PathDisplayer,
 ): SettingItem[] {
-  const pinned = describePinnedFiles(cwd, sessionPath, nextTurnPaths, files);
-  const items: SettingItem[] = [];
-
-  for (const fullPath of pinned.nextTurn) {
-    items.push({
-      id: `next-turn:${fullPath.fullPath}`,
-      label: fullPath.displayPath,
-      currentValue: "keep",
-      values: ["keep", "remove"],
-    });
-  }
-
-  if (pinned.session) {
-    items.push({
-      id: `session:${pinned.session.fullPath}`,
-      label: pinned.session.displayPath,
-      currentValue: "keep",
-      values: ["keep", "remove"],
-    });
-  }
-
-  return items;
+  return describePinnedFiles(cwd, nextTurnPins, files).nextTurn.map((pin) => ({
+    id: `next-turn:${pin.key}`,
+    label: pin.displayLabel,
+    currentValue: "keep",
+    values: ["keep", "remove"],
+  }));
 }
 
-export function ensurePath(paths: ReadonlyArray<string>, fullPath: string): string[] {
-  return paths.includes(fullPath) ? [...paths] : [...paths, fullPath];
+export function describeContextPin(
+  pin: ContextPin,
+  cwd: string,
+  files: PathDisplayer,
+): PinnedContextView {
+  const displayPath = files.displayPath(pin.fullPath, cwd);
+  return {
+    key: pinKey(pin),
+    pin,
+    displayPath,
+    displayLabel: pin.kind === "file"
+      ? displayPath
+      : `${displayPath}:${pin.startLine}-${pin.endLine}`,
+  };
 }
 
-export function removePinnedPath(paths: ReadonlyArray<string>, fullPath: string): string[] {
-  return paths.filter((path) => path !== fullPath);
+export function pinKey(pin: ContextPin): string {
+  return pin.kind === "file"
+    ? `file:${pin.fullPath}`
+    : `range:${pin.fullPath}:${pin.startLine}:${pin.endLine}`;
 }
 
-export function togglePinnedPath(paths: ReadonlyArray<string>, fullPath: string): string[] {
-  return paths.includes(fullPath)
-    ? removePinnedPath(paths, fullPath)
-    : ensurePath(paths, fullPath);
+export function pinFullPath(pin: ContextPin): string {
+  return pin.fullPath;
 }
 
-export function toggleSessionPath(
-  sessionPath: string | undefined,
-  fullPath: string,
-): string | undefined {
-  return sessionPath === fullPath ? undefined : fullPath;
+export function ensurePin(
+  pins: ReadonlyArray<ContextPin>,
+  nextPin: ContextPin,
+): ContextPin[] {
+  const key = pinKey(nextPin);
+  const index = pins.findIndex((pin) => pinKey(pin) === key);
+  if (index === -1) return [...pins, nextPin];
+
+  const nextPins = [...pins];
+  nextPins[index] = nextPin;
+  return nextPins;
 }
 
-function formatScope(scope: PinScope): string {
-  return scope === "next-turn" ? "next turn" : scope;
+export function removeContextPin(
+  pins: ReadonlyArray<ContextPin>,
+  targetPin: ContextPin,
+): ContextPin[] {
+  const key = pinKey(targetPin);
+  return pins.filter((pin) => pinKey(pin) !== key);
+}
+
+export function togglePinnedPin(
+  pins: ReadonlyArray<ContextPin>,
+  targetPin: ContextPin,
+): ContextPin[] {
+  const key = pinKey(targetPin);
+  return pins.some((pin) => pinKey(pin) === key)
+    ? removeContextPin(pins, targetPin)
+    : ensurePin(pins, targetPin);
+}
+
+function formatSnapshot(pin: RangeContextPin): string {
+  return pin.snapshot
+    .split("\n")
+    .map((line, index) => `${pin.startLine + index} | ${line}`)
+    .join("\n");
 }

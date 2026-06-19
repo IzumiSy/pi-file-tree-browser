@@ -10,7 +10,14 @@ import {
   type PreviewData,
   type TrackedFile,
 } from "./file-repository";
-import { togglePinnedPath } from "./pinned-files";
+import {
+  pinFullPath,
+  pinKey,
+  removeContextPin,
+  togglePinnedPin,
+  type ContextPin,
+  type RangeContextPin,
+} from "./pinned-files";
 import { fit } from "./text-layout";
 
 type FileRepositoryLike = Pick<
@@ -46,7 +53,7 @@ const HELP_LINES = [
   "File browser help",
   "",
   "Navigation",
-  "↑↓ / j k  Move selection or preview scroll",
+  "↑↓ / j k  Move selection or preview cursor",
   "Ctrl+U/D   Move list by 4 rows, help/preview by half a page",
   "h / ←      Go to parent directory or close preview",
   "l / →      Open directory or preview file",
@@ -56,14 +63,14 @@ const HELP_LINES = [
   "/          Search tracked files + parent dirs",
   "Type       Filter while search is open",
   "Backspace  Delete search input",
-  "Esc        Leave search or help",
+  "Esc        Leave search/help or clear preview selection",
   "",
   "Pins",
-  "s          Toggle next-turn pinned file",
-  "Ctrl+S     Toggle session-pinned file and close",
+  "s          Toggle next-turn pin for file or preview selection",
+  "v          Mark preview range start/end, or remove pinned hunk",
   "",
   "Preview",
-  "Ctrl+U/D   Scroll preview by half a page",
+  "Ctrl+U/D   Move preview cursor by half a page",
   "q          Close preview or browser",
   "r          Reload directory",
   "Ctrl+C     Close browser",
@@ -71,10 +78,18 @@ const HELP_LINES = [
   "Press ? again to close this help.",
 ] as const;
 
+export type FileViewerState = {
+  treeRoot: string;
+  selectedPath: string | undefined;
+  treeScroll: number;
+  previewPath: string | undefined;
+  previewScroll: number;
+  previewCursorLine: number;
+};
+
 export type FileViewerResult =
-  | { kind: "close" }
-  | { kind: "edit"; fullPath: string }
-  | { kind: "session-pin"; fullPath: string };
+  | { kind: "close"; state: FileViewerState }
+  | { kind: "edit"; fullPath: string; state: FileViewerState };
 
 const FILE_SELECTION_BG: BgColor = "selectedBg";
 const FILE_TREE_BG: BgColor = "customMessageBg";
@@ -264,6 +279,8 @@ export class PreviewModel {
   previewData: PreviewData | undefined;
   previewScroll = 0;
   previewPageStep = 1;
+  cursorLine = 0;
+  selectionAnchor: number | undefined;
 
   constructor(private readonly files: FileRepositoryLike) {}
 
@@ -275,6 +292,8 @@ export class PreviewModel {
     this.previewPath = fullPath;
     this.previewData = this.files.readPreview(fullPath);
     this.previewScroll = 0;
+    this.cursorLine = 0;
+    this.selectionAnchor = undefined;
   }
 
   close(): boolean {
@@ -283,12 +302,51 @@ export class PreviewModel {
     this.previewData = undefined;
     this.previewScroll = 0;
     this.previewPageStep = 1;
+    this.cursorLine = 0;
+    this.selectionAnchor = undefined;
     return true;
   }
 
+  moveCursor(delta: number): void {
+    const maxLine = Math.max(0, this.lineCount() - 1);
+    const next = Math.max(0, Math.min(maxLine, this.cursorLine + delta));
+    this.cursorLine = next;
+  }
+
+  focusLine(lineIndex: number): void {
+    const maxLine = Math.max(0, this.lineCount() - 1);
+    const next = Math.max(0, Math.min(maxLine, lineIndex));
+    this.cursorLine = next;
+    this.previewScroll = next;
+  }
+
   scrollBy(delta: number): void {
-    if (!this.previewData?.fallbackLines.length) return;
     this.previewScroll = Math.max(0, this.previewScroll + delta);
+  }
+
+  keepCursorVisible(height: number): void {
+    const bodyHeight = Math.max(1, height);
+    const maxScroll = Math.max(0, this.lineCount() - bodyHeight);
+    if (this.cursorLine < this.previewScroll) {
+      this.previewScroll = this.cursorLine;
+    }
+    if (this.cursorLine >= this.previewScroll + bodyHeight) {
+      this.previewScroll = this.cursorLine - bodyHeight + 1;
+    }
+    this.previewScroll = Math.max(0, Math.min(maxScroll, this.previewScroll));
+  }
+
+  toggleSelectionAnchor(): void {
+    if (!this.previewPath || !this.previewData) return;
+    this.selectionAnchor = this.selectionAnchor === undefined
+      ? this.cursorLine
+      : undefined;
+  }
+
+  clearSelection(): boolean {
+    if (this.selectionAnchor === undefined) return false;
+    this.selectionAnchor = undefined;
+    return true;
   }
 
   visibleLines(count: number): string[] {
@@ -315,21 +373,51 @@ export class PreviewModel {
     return this.previewData?.fallbackLines.length ?? 0;
   }
 
+  selectedRange(): { start: number; end: number } | undefined {
+    if (!this.previewPath || !this.previewData || this.lineCount() === 0) return undefined;
+    const anchor = this.selectionAnchor ?? this.cursorLine;
+    return {
+      start: Math.min(anchor, this.cursorLine),
+      end: Math.max(anchor, this.cursorLine),
+    };
+  }
+
+  createRangePin(): ContextPin | undefined {
+    if (!this.previewPath || !this.previewData) return undefined;
+    const range = this.selectedRange();
+    if (!range) return undefined;
+
+    return {
+      kind: "range",
+      fullPath: this.previewPath,
+      startLine: range.start + 1,
+      endLine: range.end + 1,
+      snapshot: this.previewData.fallbackLines.slice(range.start, range.end + 1).join("\n"),
+    };
+  }
+
+  restoreState(state: {
+    previewPath: string | undefined;
+    previewScroll: number;
+    previewCursorLine: number;
+  }): void {
+    if (!state.previewPath) return;
+
+    this.open(state.previewPath);
+    const maxLine = Math.max(0, this.lineCount() - 1);
+    this.cursorLine = Math.max(0, Math.min(maxLine, state.previewCursorLine));
+    this.previewScroll = Math.max(0, Math.min(maxLine, state.previewScroll));
+  }
+
   invalidate(): void {}
 }
-
-type PreviewViewportCache = {
-  path: string;
-  width: number;
-  height: number;
-  scroll: number;
-  lines: string[];
-};
 
 export class FileViewerOverlay {
   private readonly tree: FileTreeModel;
   private readonly search: FileSearchModel;
   private readonly preview: PreviewModel;
+  private readonly commitChatContextPins: (pins: ContextPin[]) => void;
+  private readonly done: (result: FileViewerResult) => void;
   private mode: ViewerMode = "tree";
   private treePageStep = TREE_PAGE_STEP;
   private previousMode: Exclude<ViewerMode, "help"> = "tree";
@@ -338,21 +426,42 @@ export class FileViewerOverlay {
   private headerCache: RenderCache | undefined;
   private treePanelCache: RenderCache | undefined;
   private searchPanelCache: RenderCache | undefined;
-  private previewPanelCache: PreviewViewportCache | undefined;
 
   constructor(
     private readonly cwd: string,
     private readonly tui: TUI,
     private readonly theme: Theme,
     private readonly files: FileRepositoryLike,
-    private chatContextPaths: string[],
-    private readonly sessionContextPath: string | undefined,
-    private readonly commitChatContextPath: (fullPaths: string[]) => void,
-    private readonly done: (result: FileViewerResult) => void,
+    private chatContextPins: ContextPin[],
+    commitChatContextPinsOrUnusedSessionPin:
+      | ((pins: ContextPin[]) => void)
+      | ContextPin
+      | undefined,
+    doneOrCommitChatContextPins:
+      | ((result: FileViewerResult) => void)
+      | ((pins: ContextPin[]) => void),
+    maybeDone?: (result: FileViewerResult) => void,
   ) {
+    if (typeof commitChatContextPinsOrUnusedSessionPin === "function") {
+      this.commitChatContextPins = commitChatContextPinsOrUnusedSessionPin;
+      this.done = doneOrCommitChatContextPins as (result: FileViewerResult) => void;
+    } else {
+      this.commitChatContextPins = doneOrCommitChatContextPins as (pins: ContextPin[]) => void;
+      this.done = maybeDone as (result: FileViewerResult) => void;
+    }
+
     this.tree = new FileTreeModel(cwd, files);
     this.search = new FileSearchModel(cwd, files);
     this.preview = new PreviewModel(files);
+  }
+
+  restoreState(state: FileViewerState | undefined): void {
+    if (!state) return;
+
+    this.tree.treeRoot = isWithin(state.treeRoot, this.cwd) ? state.treeRoot : this.cwd;
+    this.tree.reload(state.selectedPath ?? state.previewPath ?? this.tree.treeRoot);
+    this.tree.scroll = Math.max(0, Math.min(state.treeScroll, Math.max(0, this.tree.rows.length - 1)));
+    this.preview.restoreState(state);
   }
 
   handleInput(data: string): void {
@@ -374,7 +483,20 @@ export class FileViewerOverlay {
       return;
     }
 
-    if (matchesKey(data, "escape") || matchesKey(data, "q")) {
+    if (matchesKey(data, "escape")) {
+      if (this.preview.clearSelection()) {
+        this.tui.requestRender();
+        return;
+      }
+      if (this.preview.close()) {
+        this.tui.requestRender();
+        return;
+      }
+      this.finish();
+      return;
+    }
+
+    if (matchesKey(data, "q")) {
       if (this.preview.close()) {
         this.tui.requestRender();
         return;
@@ -390,20 +512,28 @@ export class FileViewerOverlay {
     }
 
     if (matchesKey(data, "up")) {
-      this.tree.move(-1);
+      if (this.preview.isOpen()) {
+        this.preview.moveCursor(-1);
+      } else {
+        this.tree.move(-1);
+      }
       this.tui.requestRender();
       return;
     }
 
     if (matchesKey(data, "down")) {
-      this.tree.move(1);
+      if (this.preview.isOpen()) {
+        this.preview.moveCursor(1);
+      } else {
+        this.tree.move(1);
+      }
       this.tui.requestRender();
       return;
     }
 
     if (matchesKey(data, "k")) {
       if (this.preview.isOpen()) {
-        this.preview.scrollBy(-1);
+        this.preview.moveCursor(-1);
       } else {
         this.tree.move(-1);
       }
@@ -413,7 +543,7 @@ export class FileViewerOverlay {
 
     if (matchesKey(data, "j")) {
       if (this.preview.isOpen()) {
-        this.preview.scrollBy(1);
+        this.preview.moveCursor(1);
       } else {
         this.tree.move(1);
       }
@@ -423,7 +553,7 @@ export class FileViewerOverlay {
 
     if (matchesKey(data, "ctrl+u")) {
       if (this.preview.isOpen()) {
-        this.preview.scrollBy(-this.preview.previewPageStep);
+        this.preview.moveCursor(-this.preview.previewPageStep);
         this.tui.requestRender();
       } else if (this.mode === "tree") {
         this.tree.move(-this.treePageStep);
@@ -434,7 +564,7 @@ export class FileViewerOverlay {
 
     if (matchesKey(data, "ctrl+d")) {
       if (this.preview.isOpen()) {
-        this.preview.scrollBy(this.preview.previewPageStep);
+        this.preview.moveCursor(this.preview.previewPageStep);
         this.tui.requestRender();
       } else if (this.mode === "tree") {
         this.tree.move(this.treePageStep);
@@ -478,13 +608,19 @@ export class FileViewerOverlay {
       return;
     }
 
-    if (matchesKey(data, "ctrl+s")) {
-      this.pinSelectedSessionPath();
+    if (matchesKey(data, "v")) {
+      if (!this.preview.isOpen()) return;
+      if (this.preview.selectionAnchor !== undefined) {
+        this.preview.toggleSelectionAnchor();
+      } else if (!this.removePinnedRangeAtCursor()) {
+        this.preview.toggleSelectionAnchor();
+      }
+      this.tui.requestRender();
       return;
     }
 
     if (matchesKey(data, "s")) {
-      this.toggleSelectedContextPath();
+      this.toggleSelectedContextPin();
       this.tui.requestRender();
       return;
     }
@@ -549,15 +685,22 @@ export class FileViewerOverlay {
     this.headerCache = undefined;
     this.treePanelCache = undefined;
     this.searchPanelCache = undefined;
-    this.previewPanelCache = undefined;
     this.preview.invalidate();
   }
 
   dispose(): void {}
 
-  private finish(result: FileViewerResult = { kind: "close" }): void {
-    this.commitChatContextPath(this.chatContextPaths);
-    this.done(result);
+  private finish(
+    result?: { kind: "close" } | { kind: "edit"; fullPath: string },
+  ): void {
+    this.commitChatContextPins(this.chatContextPins);
+    const state = this.snapshotState();
+    if (!result || result.kind === "close") {
+      this.done({ kind: "close", state });
+      return;
+    }
+
+    this.done({ ...result, state });
   }
 
   private handleHelpInput(data: string): boolean {
@@ -665,6 +808,7 @@ export class FileViewerOverlay {
     }
     this.revealInTree(revealHit.fullPath);
     this.preview.open(revealHit.fullPath);
+    this.focusPinnedPreviewRange();
   }
 
   private revealInTree(fullPath: string): void {
@@ -685,6 +829,7 @@ export class FileViewerOverlay {
     }
 
     this.preview.open(row.fullPath);
+    this.focusPinnedPreviewRange();
   }
 
   private editPreviewedFile(): void {
@@ -692,29 +837,40 @@ export class FileViewerOverlay {
     this.finish({ kind: "edit", fullPath: this.preview.previewPath });
   }
 
-  private toggleSelectedContextPath(): void {
-    const fullPath = this.selectedFilePath();
-    if (!fullPath) return;
-
-    this.chatContextPaths = togglePinnedPath(this.chatContextPaths, fullPath);
+  private snapshotState(): FileViewerState {
+    return {
+      treeRoot: this.tree.treeRoot,
+      selectedPath: this.tree.currentRow()?.fullPath,
+      treeScroll: this.tree.scroll,
+      previewPath: this.preview.previewPath,
+      previewScroll: this.preview.previewScroll,
+      previewCursorLine: this.preview.cursorLine,
+    };
   }
 
-  private pinSelectedSessionPath(): void {
-    const fullPath = this.selectedFilePath();
-    if (!fullPath) return;
+  private toggleSelectedContextPin(): void {
+    const pin = this.selectedPin();
+    if (!pin) return;
 
-    this.finish({ kind: "session-pin", fullPath });
+    this.chatContextPins = togglePinnedPin(this.chatContextPins, pin);
+    this.preview.clearSelection();
   }
 
-  private selectedFilePath(): string | undefined {
+  private selectedPin(): ContextPin | undefined {
     if (this.mode === "search") {
       const result = this.search.currentResult();
-      return result && !result.isDirectory ? result.fullPath : undefined;
+      return result && !result.isDirectory
+        ? { kind: "file", fullPath: result.fullPath }
+        : undefined;
+    }
+
+    if (this.preview.isOpen()) {
+      return this.preview.createRangePin();
     }
 
     const row = this.tree.currentRow();
     if (!row || row.isDirectory || row.fullPath.endsWith("#more")) return undefined;
-    return row.fullPath;
+    return { kind: "file", fullPath: row.fullPath };
   }
 
   private boxFromLines(
@@ -803,7 +959,7 @@ export class FileViewerOverlay {
       this.tree.version,
       this.tree.scroll,
       this.tree.selected,
-      this.chatContextPaths.join("\u0000"),
+      this.chatContextPins.map((pin) => pinKey(pin)).join("\u0000"),
     ].join(":");
     this.treePanelCache = getCachedLines(this.treePanelCache, key, () => {
       const visibleRows = this.tree.rows.slice(
@@ -833,7 +989,7 @@ export class FileViewerOverlay {
       this.search.version,
       this.search.scroll,
       this.search.selected,
-      this.chatContextPaths.join("\u0000"),
+      this.chatContextPins.map((pin) => pinKey(pin)).join("\u0000"),
     ].join(":");
     this.searchPanelCache = getCachedLines(this.searchPanelCache, key, () => {
       const visibleRows = this.search.results.slice(
@@ -862,55 +1018,62 @@ export class FileViewerOverlay {
   private renderPreviewPanel(width: number, height: number): string[] {
     const bodyHeight = Math.max(1, height);
     this.preview.previewPageStep = Math.max(1, Math.floor(bodyHeight / 2));
-    const maxScroll = Math.max(0, this.preview.lineCount() - bodyHeight);
-    this.preview.previewScroll = Math.min(this.preview.previewScroll, maxScroll);
+    this.preview.keepCursorVisible(bodyHeight);
 
-    const previewPath = this.preview.previewPath;
-    if (!previewPath) {
-      return Array.from({ length: bodyHeight }, () => this.renderPreviewLine(width));
+    const lineCount = this.preview.lineCount();
+    const gutterWidth = Math.max(1, `${Math.max(1, lineCount)}`.length);
+    const selectedRange = this.preview.selectedRange();
+    const visibleLines = this.preview.visibleLines(bodyHeight);
+    const lines: string[] = [];
+
+    for (let index = 0; index < bodyHeight; index += 1) {
+      const lineIndex = this.preview.previewScroll + index;
+      const lineNumber = lineIndex < lineCount ? lineIndex + 1 : undefined;
+      const inRange = !!selectedRange
+        && lineIndex >= selectedRange.start
+        && lineIndex <= selectedRange.end;
+      lines.push(
+        this.renderPreviewLine(
+          width,
+          gutterWidth,
+          visibleLines[index] ?? "",
+          lineNumber,
+          lineIndex === this.preview.cursorLine,
+          inRange,
+          this.previewLinePinned(lineIndex + 1),
+        ),
+      );
     }
 
-    const scroll = this.preview.previewScroll;
-    const cached = this.previewPanelCache;
-    if (
-      cached &&
-      cached.path === previewPath &&
-      cached.width === width &&
-      cached.height === bodyHeight
-    ) {
-      if (cached.scroll === scroll) return cached.lines;
-
-      if (cached.scroll + 1 === scroll) {
-        const lines = cached.lines.slice(1);
-        lines.push(this.renderPreviewLine(width, this.preview.lineAt(scroll + bodyHeight - 1)));
-        this.previewPanelCache = { path: previewPath, width, height: bodyHeight, scroll, lines };
-        return lines;
-      }
-
-      if (cached.scroll - 1 === scroll) {
-        const lines = cached.lines.slice(0, -1);
-        lines.unshift(this.renderPreviewLine(width, this.preview.lineAt(scroll)));
-        this.previewPanelCache = { path: previewPath, width, height: bodyHeight, scroll, lines };
-        return lines;
-      }
-    }
-
-    const lines = this.preview
-      .visibleLines(bodyHeight)
-      .map((line) => this.renderPreviewLine(width, line));
-    while (lines.length < bodyHeight) lines.push(this.renderPreviewLine(width));
-    this.previewPanelCache = {
-      path: previewPath,
-      width,
-      height: bodyHeight,
-      scroll,
-      lines,
-    };
     return lines;
   }
 
-  private renderPreviewLine(width: number, line = ""): string {
-    return this.theme.bg(PREVIEW_BG, fit(width, line));
+  private renderPreviewLine(
+    width: number,
+    gutterWidth: number,
+    line = "",
+    lineNumber?: number,
+    selected = false,
+    inRange = false,
+    pinned = false,
+  ): string {
+    const markerText = pinned
+      ? "●"
+      : inRange
+        ? ">"
+        : " ";
+    const marker = markerText === ">"
+      ? this.theme.fg("accent", markerText)
+      : markerText === "●"
+        ? this.theme.fg("warning", markerText)
+        : markerText;
+    const numberText = lineNumber === undefined
+      ? " ".repeat(gutterWidth)
+      : String(lineNumber).padStart(gutterWidth, " ");
+    const prefixText = `${markerText} ${numberText} | `;
+    const prefix = `${marker} ${this.theme.fg("muted", numberText)} | `;
+    const content = `${prefix}${fit(Math.max(1, width - prefixText.length), line)}`;
+    return this.theme.bg(selected ? FILE_SELECTION_BG : PREVIEW_BG, fit(width, content));
   }
 
   private renderHelpLine(width: number, line = ""): string {
@@ -931,14 +1094,46 @@ export class FileViewerOverlay {
   }
 
   private renderPinnedMarkers(fullPath: string): string {
-    const markers: string[] = [];
-    if (this.sessionContextPath === fullPath) {
-      markers.push(this.theme.fg("accent", " ◆"));
-    }
-    if (this.chatContextPaths.includes(fullPath)) {
-      markers.push(this.theme.fg("warning", " ●"));
-    }
-    return markers.join("");
+    return this.chatContextPins.some((pin) => pinFullPath(pin) === fullPath)
+      ? this.theme.fg("warning", " ●")
+      : "";
+  }
+
+  private focusPinnedPreviewRange(): void {
+    const range = this.previewPinnedRanges()[0];
+    if (!range) return;
+    this.preview.focusLine(range.startLine - 1);
+  }
+
+  private removePinnedRangeAtCursor(): boolean {
+    const lineNumber = this.preview.cursorLine + 1;
+    const pin = this.previewPinnedRanges().find((range) =>
+      lineNumber >= range.startLine && lineNumber <= range.endLine,
+    );
+    if (!pin) return false;
+
+    this.chatContextPins = removeContextPin(this.chatContextPins, pin);
+    return true;
+  }
+
+  private previewPinnedRanges(): RangeContextPin[] {
+    const previewPath = this.preview.previewPath;
+    if (!previewPath) return [];
+
+    return this.chatContextPins
+      .filter((pin): pin is RangeContextPin =>
+        pin.kind === "range" && pin.fullPath === previewPath,
+      )
+      .sort((a, b) => a.startLine - b.startLine || a.endLine - b.endLine);
+  }
+
+  private previewLinePinned(lineNumber: number): boolean {
+    return this.chatContextPins.some((pin) =>
+      pin.kind === "range"
+      && pin.fullPath === this.preview.previewPath
+      && lineNumber >= pin.startLine
+      && lineNumber <= pin.endLine,
+    );
   }
 
   private joinColumns(

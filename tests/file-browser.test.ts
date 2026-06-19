@@ -4,16 +4,16 @@ import {
   FileTreeModel,
   FileViewerOverlay,
   PreviewModel,
+  type FileViewerState,
 } from "../extensions/file-browser";
 import {
   buildPinManagerItems,
   buildPinnedFileContextText,
   describePinnedFiles,
-  ensurePath,
-  readSessionContextPath,
-  removePinnedPath,
-  togglePinnedPath,
-  toggleSessionPath,
+  ensurePin,
+  removeContextPin,
+  togglePinnedPin,
+  type ContextPin,
 } from "../extensions/pinned-files";
 import type {
   PreviewData,
@@ -83,6 +83,19 @@ function tracked(relativePath: string, isDirectory = false): TrackedFile {
     baseName: relativePath.split("/").at(-1) ?? relativePath,
     isDirectory,
   };
+}
+
+function filePin(fullPath: string): ContextPin {
+  return { kind: "file", fullPath };
+}
+
+function rangePin(
+  fullPath: string,
+  startLine: number,
+  endLine: number,
+  snapshot: string,
+): ContextPin {
+  return { kind: "range", fullPath, startLine, endLine, snapshot };
 }
 
 const pathDisplayer = {
@@ -298,28 +311,228 @@ describe("PreviewModel", () => {
 });
 
 describe("FileViewerOverlay", () => {
-  it("pins the selected file into the session and closes on ctrl+s", () => {
-    const files = new FakeFileRepository({
-      "/root": [entry("/root/file.ts", false)],
-    });
-    const results: unknown[] = [];
+  it("clears preview selection after toggling a preview range", () => {
+    const files = new FakeFileRepository(
+      {
+        "/root": [entry("/root/file.ts", false)],
+      },
+      {
+        "/root/file.ts": {
+          rawText: "first\nsecond\nthird",
+          fallbackLines: ["first", "second", "third"],
+          highlight: true,
+        },
+      },
+    );
 
     const overlay = new FileViewerOverlay(
       "/root",
       { requestRender() {}, terminal: { rows: 20 } } as never,
-      {} as never,
+      {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as never,
+      files,
+      [],
+      undefined,
+      () => {},
+      () => {},
+    );
+
+    overlay.handleInput("\r");
+    overlay.handleInput("j");
+    overlay.handleInput("v");
+    overlay.handleInput("j");
+    overlay.handleInput("s");
+    overlay.handleInput("v");
+
+    const rendered = overlay.render(80).join("\n");
+    expect(rendered).not.toContain("> 2 | hl:second");
+    expect(rendered).not.toContain("● 2 | hl:second");
+    expect(rendered).not.toContain("● 3 | hl:third");
+  });
+
+  it("shows the pinned marker immediately after toggling a preview range", () => {
+    const files = new FakeFileRepository(
+      {
+        "/root": [entry("/root/file.ts", false)],
+      },
+      {
+        "/root/file.ts": {
+          rawText: "first\nsecond\nthird",
+          fallbackLines: ["first", "second", "third"],
+          highlight: true,
+        },
+      },
+    );
+
+    const overlay = new FileViewerOverlay(
+      "/root",
+      { requestRender() {}, terminal: { rows: 20 } } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as never,
+      files,
+      [],
+      undefined,
+      () => {},
+      () => {},
+    );
+
+    overlay.handleInput("\r");
+    overlay.handleInput("j");
+    overlay.handleInput("v");
+    overlay.handleInput("j");
+    overlay.handleInput("s");
+
+    const rendered = overlay.render(80).join("\n");
+    expect(rendered).toContain("● 2 | hl:second");
+    expect(rendered).toContain("● 3 | hl:third");
+  });
+
+  it("removes the pinned preview range with v on the hunk", () => {
+    const files = new FakeFileRepository(
+      {
+        "/root": [entry("/root/file.ts", false)],
+      },
+      {
+        "/root/file.ts": {
+          rawText: "first\nsecond\nthird",
+          fallbackLines: ["first", "second", "third"],
+          highlight: true,
+        },
+      },
+    );
+    const committed: ContextPin[][] = [];
+
+    const overlay = new FileViewerOverlay(
+      "/root",
+      { requestRender() {}, terminal: { rows: 20 } } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as never,
+      files,
+      [rangePin("/root/file.ts", 2, 3, "second\nthird")],
+      (pins: ContextPin[]) => {
+        committed.push(pins);
+      },
+      () => {},
+    );
+
+    overlay.handleInput("\r");
+    overlay.handleInput("v");
+    const rendered = overlay.render(80).join("\n");
+
+    expect(rendered).not.toContain("● 2 | hl:second");
+    expect(rendered).not.toContain("● 3 | hl:third");
+
+    overlay.handleInput("q");
+    overlay.handleInput("q");
+    expect(committed).toEqual([[]]);
+  });
+
+  it("restores the last tree and preview state when reopened", () => {
+    const files = new FakeFileRepository(
+      {
+        "/root": [entry("/root/src", true), entry("/root/README.md", false)],
+        "/root/src": [entry("/root/src/a.ts", false), entry("/root/src/b.ts", false)],
+      },
+      {
+        "/root/src/b.ts": {
+          rawText: "one\ntwo\nthree",
+          fallbackLines: ["one", "two", "three"],
+          highlight: true,
+        },
+      },
+    );
+    const results: { state: FileViewerState }[] = [];
+
+    const first = new FileViewerOverlay(
+      "/root",
+      { requestRender() {}, terminal: { rows: 10 } } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as never,
       files,
       [],
       undefined,
       () => {},
       (result) => {
-        results.push(result);
+        results.push(result as { state: FileViewerState });
       },
     );
 
-    overlay.handleInput(String.fromCharCode(19));
+    first.handleInput("\r");
+    first.handleInput("j");
+    first.handleInput("\r");
+    first.handleInput("j");
+    first.handleInput("j");
+    first.handleInput(String.fromCharCode(3));
 
-    expect(results).toEqual([{ kind: "session-pin", fullPath: "/root/file.ts" }]);
+    const second = new FileViewerOverlay(
+      "/root",
+      { requestRender() {}, terminal: { rows: 10 } } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as never,
+      files,
+      [],
+      undefined,
+      () => {},
+      () => {},
+    );
+
+    second.restoreState(results[0]?.state);
+
+    expect((second as any).tree.treeRoot).toBe("/root/src");
+    expect((second as any).tree.currentRow()?.fullPath).toBe("/root/src/b.ts");
+    expect((second as any).preview.previewPath).toBe("/root/src/b.ts");
+    expect((second as any).preview.cursorLine).toBe(2);
+  });
+
+  it("shows the pinned preview range again when reopening the file", () => {
+    const files = new FakeFileRepository(
+      {
+        "/root": [entry("/root/file.ts", false)],
+      },
+      {
+        "/root/file.ts": {
+          rawText: "first\nsecond\nthird",
+          fallbackLines: ["first", "second", "third"],
+          highlight: true,
+        },
+      },
+    );
+
+    const overlay = new FileViewerOverlay(
+      "/root",
+      { requestRender() {}, terminal: { rows: 20 } } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as never,
+      files,
+      [rangePin("/root/file.ts", 2, 3, "second\nthird")],
+      undefined,
+      () => {},
+      () => {},
+    );
+
+    overlay.handleInput("\r");
+    const rendered = overlay.render(80).join("\n");
+
+    expect(rendered).toContain("● 2 | hl:second");
+    expect(rendered).toContain("● 3 | hl:third");
   });
 
   it("moves by 4 rows with ctrl+u/d in the tree", () => {
@@ -361,7 +574,7 @@ describe("FileViewerOverlay", () => {
     const files = new FakeFileRepository({
       "/root": [entry("/root/a.ts", false), entry("/root/b.ts", false)],
     });
-    const committed: string[][] = [];
+    const committed: ContextPin[][] = [];
 
     const overlay = new FileViewerOverlay(
       "/root",
@@ -374,7 +587,7 @@ describe("FileViewerOverlay", () => {
       files,
       [],
       undefined,
-      (paths) => {
+      (paths: ContextPin[]) => {
         committed.push(paths);
       },
       () => {},
@@ -388,7 +601,7 @@ describe("FileViewerOverlay", () => {
     expect(renderedPinned).toContain("b.ts ●");
 
     overlay.handleInput("q");
-    expect(committed).toEqual([["/root/a.ts", "/root/b.ts"]]);
+    expect(committed).toEqual([[filePin("/root/a.ts"), filePin("/root/b.ts")]]);
   });
 
   it("keeps the tree pane in a stable split layout before and after preview opens", () => {
@@ -488,124 +701,99 @@ describe("FileViewerOverlay", () => {
   });
 });
 
-describe("session file pin helpers", () => {
-  it("normalizes session and next-turn pins once while preserving both views", () => {
+describe("file pin helpers", () => {
+  it("normalizes next-turn pins once while preserving display labels", () => {
     expect(
-      describePinnedFiles("/root", "/root/file.ts", ["/root/file.ts", "/root/other.ts"], pathDisplayer),
+      describePinnedFiles(
+        "/root",
+        [filePin("/root/file.ts"), filePin("/root/other.ts")],
+        pathDisplayer,
+      ),
     ).toEqual({
-      session: {
-        fullPath: "/root/file.ts",
-        displayPath: "file.ts",
-      },
       nextTurn: [
         {
-          fullPath: "/root/file.ts",
+          key: "file:/root/file.ts",
+          pin: filePin("/root/file.ts"),
           displayPath: "file.ts",
+          displayLabel: "file.ts",
         },
         {
-          fullPath: "/root/other.ts",
+          key: "file:/root/other.ts",
+          pin: filePin("/root/other.ts"),
           displayPath: "other.ts",
-        },
-      ],
-      combined: [
-        {
-          fullPath: "/root/file.ts",
-          displayPath: "file.ts",
-          scopes: ["session", "next-turn"],
-        },
-        {
-          fullPath: "/root/other.ts",
-          displayPath: "other.ts",
-          scopes: ["next-turn"],
+          displayLabel: "other.ts",
         },
       ],
     });
   });
 
   it("adds, removes, and toggles next-turn pins without duplicates", () => {
-    expect(ensurePath(["/root/a.ts"], "/root/a.ts")).toEqual(["/root/a.ts"]);
-    expect(togglePinnedPath([], "/root/a.ts")).toEqual(["/root/a.ts"]);
-    expect(togglePinnedPath(["/root/a.ts"], "/root/a.ts")).toEqual([]);
-    expect(removePinnedPath(["/root/a.ts", "/root/b.ts"], "/root/a.ts")).toEqual([
-      "/root/b.ts",
+    expect(ensurePin([filePin("/root/a.ts")], filePin("/root/a.ts"))).toEqual([
+      filePin("/root/a.ts"),
     ]);
-  });
-
-  it("toggles the session pin off when selecting the same file", () => {
-    expect(toggleSessionPath(undefined, "/root/a.ts")).toBe("/root/a.ts");
-    expect(toggleSessionPath("/root/a.ts", "/root/a.ts")).toBeUndefined();
-    expect(toggleSessionPath("/root/a.ts", "/root/b.ts")).toBe("/root/b.ts");
-  });
-
-  it("restores the latest session-pinned file", () => {
+    expect(togglePinnedPin([], filePin("/root/a.ts"))).toEqual([filePin("/root/a.ts")]);
+    expect(togglePinnedPin([filePin("/root/a.ts")], filePin("/root/a.ts"))).toEqual([]);
     expect(
-      readSessionContextPath([
-        { type: "custom", customType: "files-session-context", data: { fullPath: "/root/a.ts" } },
-        { type: "custom", customType: "files-session-context", data: { fullPath: "/root/b.ts" } },
-      ]),
-    ).toBe("/root/b.ts");
-
-    expect(
-      readSessionContextPath([
-        { type: "custom", customType: "files-session-context", data: { fullPath: "/root/a.ts" } },
-        { type: "custom", customType: "files-session-context", data: { fullPath: undefined } },
-      ]),
-    ).toBeUndefined();
+      removeContextPin([filePin("/root/a.ts"), filePin("/root/b.ts")], filePin("/root/a.ts")),
+    ).toEqual([filePin("/root/b.ts")]);
   });
 
-  it("deduplicates session and next-turn pins in the prompt text", () => {
-    expect(
-      buildPinnedFileContextText("/root", "/root/file.ts", ["/root/file.ts"], pathDisplayer),
-    ).toContain("- session + next turn: file.ts");
+  it("lists multiple next-turn files in the prompt text", () => {
+    const text = buildPinnedFileContextText(
+      "/root",
+      [filePin("/root/a.ts"), filePin("/root/b.ts")],
+      pathDisplayer,
+    );
+
+    expect(text).toContain("- next turn file: a.ts");
+    expect(text).toContain("- next turn file: b.ts");
   });
 
-  it("lists multiple next-turn pins in the prompt text", () => {
-    const text = buildPinnedFileContextText("/root", undefined, [
-      "/root/a.ts",
-      "/root/b.ts",
-    ], pathDisplayer);
+  it("embeds snippet pins directly in the prompt text", () => {
+    const text = buildPinnedFileContextText(
+      "/root",
+      [rangePin("/root/a.ts", 2, 3, "two\nthree")],
+      pathDisplayer,
+    );
 
-    expect(text).toContain("- next turn: a.ts");
-    expect(text).toContain("- next turn: b.ts");
+    expect(text).toContain("- next turn snippet: a.ts:2-3");
+    expect(text).toContain("2 | two");
+    expect(text).toContain("3 | three");
   });
 
   it("builds pin manager items for direct removal", () => {
     expect(
-      buildPinManagerItems("/root", "/root/session.ts", ["/root/a.ts", "/root/b.ts"], pathDisplayer),
+      buildPinManagerItems(
+        "/root",
+        [filePin("/root/a.ts"), rangePin("/root/b.ts", 4, 5, "x\ny")],
+        pathDisplayer,
+      ),
     ).toEqual([
       {
-        id: "next-turn:/root/a.ts",
+        id: "next-turn:file:/root/a.ts",
         label: "a.ts",
         currentValue: "keep",
         values: ["keep", "remove"],
       },
       {
-        id: "next-turn:/root/b.ts",
-        label: "b.ts",
-        currentValue: "keep",
-        values: ["keep", "remove"],
-      },
-      {
-        id: "session:/root/session.ts",
-        label: "session.ts",
+        id: "next-turn:range:/root/b.ts:4:5",
+        label: "b.ts:4-5",
         currentValue: "keep",
         values: ["keep", "remove"],
       },
     ]);
   });
 
-  it("keeps per-scope removal controls when the same file is pinned twice", () => {
+  it("deduplicates repeated pins in the pin manager", () => {
     expect(
-      buildPinManagerItems("/root", "/root/file.ts", ["/root/file.ts"], pathDisplayer),
+      buildPinManagerItems(
+        "/root",
+        [filePin("/root/file.ts"), filePin("/root/file.ts")],
+        pathDisplayer,
+      ),
     ).toEqual([
       {
-        id: "next-turn:/root/file.ts",
-        label: "file.ts",
-        currentValue: "keep",
-        values: ["keep", "remove"],
-      },
-      {
-        id: "session:/root/file.ts",
+        id: "next-turn:file:/root/file.ts",
         label: "file.ts",
         currentValue: "keep",
         values: ["keep", "remove"],
