@@ -1,6 +1,6 @@
 {
   "name": "@izumisy/pi-file-tree-browser",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "",
   "scripts": {
     "dev": "pi -e extensions/main.ts",
