@@ -16,10 +16,13 @@ import { FileRepository } from "./file-repository";
 import {
   buildPinManagerItems,
   buildPinnedFileContextText,
+  describePinnedFiles,
   ensurePath,
+  removePinnedPath,
   type PinManagerState,
   readSessionContextPath,
   SESSION_CONTEXT_ENTRY,
+  toggleSessionPath,
 } from "./pinned-files";
 import { fit } from "./text-layout";
 
@@ -91,8 +94,10 @@ export default function (pi: ExtensionAPI) {
       }
 
       if (result?.kind === "session-pin") {
-        const nextSessionPath =
-          sessionChatContextPath === result.fullPath ? undefined : result.fullPath;
+        const nextSessionPath = toggleSessionPath(
+          sessionChatContextPath,
+          result.fullPath,
+        );
         sessionChatContextPath = nextSessionPath;
         pi.appendEntry(SESSION_CONTEXT_ENTRY, { fullPath: nextSessionPath });
         updateChatContextWidget(ctx, sessionChatContextPath, pendingChatContextPaths);
@@ -154,7 +159,7 @@ async function showPinManagerDialog(
           const fullPath = id.slice("next-turn:".length);
           nextTurnPaths = newValue === "keep"
             ? ensurePath(nextTurnPaths, fullPath)
-            : nextTurnPaths.filter((path) => path !== fullPath);
+            : removePinnedPath(nextTurnPaths, fullPath);
           return;
         }
 
@@ -211,7 +216,8 @@ function updateChatContextWidget(
 ): void {
   if (!ctx.hasUI) return;
 
-  if (!sessionPath && nextTurnPaths.length === 0) {
+  const pinned = describePinnedFiles(ctx.cwd, sessionPath, nextTurnPaths, files);
+  if (!pinned.session && pinned.nextTurn.length === 0) {
     ctx.ui.setWidget("files-chat-context", undefined);
     return;
   }
@@ -220,20 +226,20 @@ function updateChatContextWidget(
     render: (width: number) => {
       const lines: string[] = [];
 
-      if (sessionPath) {
+      if (pinned.session) {
         lines.push(
           fit(
             width,
-            `${theme.fg("muted", "Pinned session file:")} ${theme.fg("accent", files.displayPath(sessionPath, ctx.cwd))}`,
+            `${theme.fg("muted", "Pinned session file:")} ${theme.fg("accent", pinned.session.displayPath)}`,
           ),
         );
       }
 
-      if (nextTurnPaths.length > 0) {
+      if (pinned.nextTurn.length > 0) {
         lines.push(
           fit(
             width,
-            `${theme.fg("muted", "Pinned next-turn files:")} ${theme.fg("accent", nextTurnPaths.map((fullPath) => files.displayPath(fullPath, ctx.cwd)).join(", "))}`,
+            `${theme.fg("muted", "Pinned next-turn files:")} ${theme.fg("accent", pinned.nextTurn.map((fullPath) => fullPath.displayPath).join(", "))}`,
           ),
         );
       }

@@ -21,6 +21,23 @@ export type PinManagerState = {
   nextTurnPaths: string[];
 };
 
+export type PinScope = "session" | "next-turn";
+
+export type PinnedFileView = {
+  fullPath: string;
+  displayPath: string;
+};
+
+export type PinnedFileDescriptor = PinnedFileView & {
+  scopes: PinScope[];
+};
+
+export type PinnedFilesState = {
+  session: PinnedFileView | undefined;
+  nextTurn: PinnedFileView[];
+  combined: PinnedFileDescriptor[];
+};
+
 export function readSessionContextPath(
   entries: ReadonlyArray<SessionEntryLike>,
 ): string | undefined {
@@ -39,24 +56,56 @@ export function readSessionContextPath(
   return undefined;
 }
 
+export function describePinnedFiles(
+  cwd: string,
+  sessionPath: string | undefined,
+  nextTurnPaths: ReadonlyArray<string>,
+  files: PathDisplayer,
+): PinnedFilesState {
+  const session = sessionPath
+    ? { fullPath: sessionPath, displayPath: files.displayPath(sessionPath, cwd) }
+    : undefined;
+  const nextTurn = nextTurnPaths.map((fullPath) => ({
+    fullPath,
+    displayPath: files.displayPath(fullPath, cwd),
+  }));
+  const combined = new Map<string, PinnedFileDescriptor>();
+
+  if (session) {
+    combined.set(session.fullPath, { ...session, scopes: ["session"] });
+  }
+
+  for (const pinned of nextTurn) {
+    const existing = combined.get(pinned.fullPath);
+    if (existing) {
+      if (!existing.scopes.includes("next-turn")) {
+        existing.scopes = [...existing.scopes, "next-turn"];
+      }
+      continue;
+    }
+
+    combined.set(pinned.fullPath, { ...pinned, scopes: ["next-turn"] });
+  }
+
+  return {
+    session,
+    nextTurn,
+    combined: [...combined.values()],
+  };
+}
+
 export function buildPinnedFileContextText(
   cwd: string,
   sessionPath: string | undefined,
   nextTurnPaths: ReadonlyArray<string>,
   files: PathDisplayer,
 ): string | undefined {
-  const labels = new Map<string, string[]>();
+  const pinned = describePinnedFiles(cwd, sessionPath, nextTurnPaths, files);
+  if (pinned.combined.length === 0) return undefined;
 
-  if (sessionPath) labels.set(sessionPath, ["session"]);
-  for (const nextTurnPath of nextTurnPaths) {
-    labels.set(nextTurnPath, [...(labels.get(nextTurnPath) ?? []), "next turn"]);
-  }
-
-  if (labels.size === 0) return undefined;
-
-  const lines = [...labels.entries()].map(([fullPath, scopes]) => {
-    const scope = scopes.join(" + ");
-    return `- ${scope}: ${files.displayPath(fullPath, cwd)}`;
+  const lines = pinned.combined.map(({ displayPath, scopes }) => {
+    const scope = scopes.map(formatScope).join(" + ");
+    return `- ${scope}: ${displayPath}`;
   });
 
   return [
@@ -72,21 +121,22 @@ export function buildPinManagerItems(
   nextTurnPaths: ReadonlyArray<string>,
   files: PathDisplayer,
 ): SettingItem[] {
+  const pinned = describePinnedFiles(cwd, sessionPath, nextTurnPaths, files);
   const items: SettingItem[] = [];
 
-  for (const fullPath of nextTurnPaths) {
+  for (const fullPath of pinned.nextTurn) {
     items.push({
-      id: `next-turn:${fullPath}`,
-      label: files.displayPath(fullPath, cwd),
+      id: `next-turn:${fullPath.fullPath}`,
+      label: fullPath.displayPath,
       currentValue: "keep",
       values: ["keep", "remove"],
     });
   }
 
-  if (sessionPath) {
+  if (pinned.session) {
     items.push({
-      id: `session:${sessionPath}`,
-      label: files.displayPath(sessionPath, cwd),
+      id: `session:${pinned.session.fullPath}`,
+      label: pinned.session.displayPath,
       currentValue: "keep",
       values: ["keep", "remove"],
     });
@@ -97,4 +147,25 @@ export function buildPinManagerItems(
 
 export function ensurePath(paths: ReadonlyArray<string>, fullPath: string): string[] {
   return paths.includes(fullPath) ? [...paths] : [...paths, fullPath];
+}
+
+export function removePinnedPath(paths: ReadonlyArray<string>, fullPath: string): string[] {
+  return paths.filter((path) => path !== fullPath);
+}
+
+export function togglePinnedPath(paths: ReadonlyArray<string>, fullPath: string): string[] {
+  return paths.includes(fullPath)
+    ? removePinnedPath(paths, fullPath)
+    : ensurePath(paths, fullPath);
+}
+
+export function toggleSessionPath(
+  sessionPath: string | undefined,
+  fullPath: string,
+): string | undefined {
+  return sessionPath === fullPath ? undefined : fullPath;
+}
+
+function formatScope(scope: PinScope): string {
+  return scope === "next-turn" ? "next turn" : scope;
 }

@@ -10,6 +10,7 @@ import {
   type PreviewData,
   type TrackedFile,
 } from "./file-repository";
+import { togglePinnedPath } from "./pinned-files";
 import { fit } from "./text-layout";
 
 type FileRepositoryLike = Pick<
@@ -695,7 +696,7 @@ export class FileViewerOverlay {
     const fullPath = this.selectedFilePath();
     if (!fullPath) return;
 
-    this.chatContextPaths = togglePath(this.chatContextPaths, fullPath);
+    this.chatContextPaths = togglePinnedPath(this.chatContextPaths, fullPath);
   }
 
   private pinSelectedSessionPath(): void {
@@ -1006,12 +1007,6 @@ function findSearchIndex(results: SearchHit[], fullPath: string | undefined): nu
 
 function isPrintableInput(data: string): boolean {
   return data.length > 0 && !/[\x00-\x1f\x7f]/.test(data);
-}
-
-function togglePath(paths: ReadonlyArray<string>, fullPath: string): string[] {
-  return paths.includes(fullPath)
-    ? paths.filter((path) => path !== fullPath)
-    : [...paths, fullPath];
 }
 
 function isWithin(target: string, base: string): boolean {

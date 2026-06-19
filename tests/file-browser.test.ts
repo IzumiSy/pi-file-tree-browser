@@ -8,7 +8,12 @@ import {
 import {
   buildPinManagerItems,
   buildPinnedFileContextText,
+  describePinnedFiles,
+  ensurePath,
   readSessionContextPath,
+  removePinnedPath,
+  togglePinnedPath,
+  toggleSessionPath,
 } from "../extensions/pinned-files";
 import type {
   PreviewData,
@@ -484,6 +489,54 @@ describe("FileViewerOverlay", () => {
 });
 
 describe("session file pin helpers", () => {
+  it("normalizes session and next-turn pins once while preserving both views", () => {
+    expect(
+      describePinnedFiles("/root", "/root/file.ts", ["/root/file.ts", "/root/other.ts"], pathDisplayer),
+    ).toEqual({
+      session: {
+        fullPath: "/root/file.ts",
+        displayPath: "file.ts",
+      },
+      nextTurn: [
+        {
+          fullPath: "/root/file.ts",
+          displayPath: "file.ts",
+        },
+        {
+          fullPath: "/root/other.ts",
+          displayPath: "other.ts",
+        },
+      ],
+      combined: [
+        {
+          fullPath: "/root/file.ts",
+          displayPath: "file.ts",
+          scopes: ["session", "next-turn"],
+        },
+        {
+          fullPath: "/root/other.ts",
+          displayPath: "other.ts",
+          scopes: ["next-turn"],
+        },
+      ],
+    });
+  });
+
+  it("adds, removes, and toggles next-turn pins without duplicates", () => {
+    expect(ensurePath(["/root/a.ts"], "/root/a.ts")).toEqual(["/root/a.ts"]);
+    expect(togglePinnedPath([], "/root/a.ts")).toEqual(["/root/a.ts"]);
+    expect(togglePinnedPath(["/root/a.ts"], "/root/a.ts")).toEqual([]);
+    expect(removePinnedPath(["/root/a.ts", "/root/b.ts"], "/root/a.ts")).toEqual([
+      "/root/b.ts",
+    ]);
+  });
+
+  it("toggles the session pin off when selecting the same file", () => {
+    expect(toggleSessionPath(undefined, "/root/a.ts")).toBe("/root/a.ts");
+    expect(toggleSessionPath("/root/a.ts", "/root/a.ts")).toBeUndefined();
+    expect(toggleSessionPath("/root/a.ts", "/root/b.ts")).toBe("/root/b.ts");
+  });
+
   it("restores the latest session-pinned file", () => {
     expect(
       readSessionContextPath([
@@ -535,6 +588,25 @@ describe("session file pin helpers", () => {
       {
         id: "session:/root/session.ts",
         label: "session.ts",
+        currentValue: "keep",
+        values: ["keep", "remove"],
+      },
+    ]);
+  });
+
+  it("keeps per-scope removal controls when the same file is pinned twice", () => {
+    expect(
+      buildPinManagerItems("/root", "/root/file.ts", ["/root/file.ts"], pathDisplayer),
+    ).toEqual([
+      {
+        id: "next-turn:/root/file.ts",
+        label: "file.ts",
+        currentValue: "keep",
+        values: ["keep", "remove"],
+      },
+      {
+        id: "session:/root/file.ts",
+        label: "file.ts",
         currentValue: "keep",
         values: ["keep", "remove"],
       },
