@@ -46,6 +46,14 @@ export type SearchHit = {
 
 type BgColor = "selectedBg" | "customMessageBg" | "toolPendingBg";
 type ViewerMode = "tree" | "search" | "help";
+type InteractionMode =
+  | "help"
+  | "file-search"
+  | "preview-search-input"
+  | "preview-search-status"
+  | "preview-selection"
+  | "preview"
+  | "browse";
 
 const TREE_PAGE_STEP = 4;
 
@@ -60,7 +68,7 @@ const HELP_LINES = [
   "Enter      Open directory, preview file, then open editor",
   "",
   "Search",
-  "/          Search tracked files + parent dirs",
+  "/          Search tracked files, or search inside previewed file",
   "Type       Filter while search is open",
   "Backspace  Delete search input",
   "Esc        Leave search/help or clear preview selection",
@@ -71,9 +79,10 @@ const HELP_LINES = [
   "",
   "Preview",
   "Ctrl+U/D   Move preview cursor by half a page",
+  "n / N      Next / previous preview search match",
   "q          Close preview or browser",
   "r          Reload directory",
-  "Ctrl+C     Close browser",
+  "Ctrl+C     Cancel current mode/selection",
   "",
   "Press ? again to close this help.",
 ] as const;
@@ -274,6 +283,117 @@ function getCachedLines(
   return { key, lines: build() };
 }
 
+export class PreviewSearchModel {
+  query = "";
+  matches: number[] = [];
+  selected = 0;
+  version = 0;
+  phase: "closed" | "input" | "status" = "closed";
+  private lines: string[] = [];
+
+  open(lines: ReadonlyArray<string>, cursorLine: number): void {
+    this.phase = "input";
+    this.query = "";
+    this.matches = [];
+    this.selected = 0;
+    this.lines = [...lines];
+    this.version += 1;
+    this.selectNearest(cursorLine);
+  }
+
+  clear(): boolean {
+    if (this.phase === "closed" && this.query.length === 0 && this.matches.length === 0) {
+      return false;
+    }
+
+    this.phase = "closed";
+    this.query = "";
+    this.matches = [];
+    this.selected = 0;
+    this.lines = [];
+    this.version += 1;
+    return true;
+  }
+
+  clearStatus(): boolean {
+    if (this.phase !== "status") return false;
+    this.phase = "closed";
+    this.version += 1;
+    return true;
+  }
+
+  isInput(): boolean {
+    return this.phase === "input";
+  }
+
+  hasStatus(): boolean {
+    return this.phase === "status" && this.query.length > 0;
+  }
+
+  canRepeat(): boolean {
+    return this.query.length > 0 && this.matches.length > 0;
+  }
+
+  shouldRenderFooter(): boolean {
+    return this.isInput() || this.hasStatus();
+  }
+
+  footerText(): string {
+    if (this.isInput()) return ` / ${this.query}`;
+    if (!this.hasStatus()) return "";
+    if (this.matches.length === 0) return ` no matches: ${this.query}`;
+    return ` ${this.query} ${this.selected + 1}/${this.matches.length}`;
+  }
+
+  insert(text: string, cursorLine: number): void {
+    this.query += text;
+    this.recompute(cursorLine);
+  }
+
+  backspace(cursorLine: number): void {
+    if (this.query.length === 0) return;
+    this.query = this.query.slice(0, -1);
+    this.recompute(cursorLine);
+  }
+
+  submit(preview: PreviewModel): void {
+    this.phase = "status";
+    this.jumpToSelected(preview);
+    this.version += 1;
+  }
+
+  move(delta: number): void {
+    if (this.matches.length === 0) return;
+    const count = this.matches.length;
+    this.selected = (((this.selected + delta) % count) + count) % count;
+    this.version += 1;
+  }
+
+  currentMatch(): number | undefined {
+    return this.matches[this.selected];
+  }
+
+  jumpToSelected(preview: PreviewModel): void {
+    const line = this.currentMatch();
+    if (line === undefined) return;
+    preview.focusLine(line);
+  }
+
+  private recompute(cursorLine: number): void {
+    const query = this.query.toLowerCase();
+    this.matches = query.length === 0
+      ? []
+      : this.lines.flatMap((line, index) => line.toLowerCase().includes(query) ? [index] : []);
+    this.selectNearest(cursorLine);
+    this.version += 1;
+  }
+
+  private selectNearest(cursorLine: number): void {
+    const next = this.matches.findIndex((line) => line >= cursorLine);
+    this.selected = next === -1 ? 0 : next;
+  }
+}
+
 export class PreviewModel {
   previewPath: string | undefined;
   previewData: PreviewData | undefined;
@@ -318,6 +438,15 @@ export class PreviewModel {
     const next = Math.max(0, Math.min(maxLine, lineIndex));
     this.cursorLine = next;
     this.previewScroll = next;
+  }
+
+  centerCursor(height: number): void {
+    const bodyHeight = Math.max(1, height);
+    const maxScroll = Math.max(0, this.lineCount() - bodyHeight);
+    this.previewScroll = Math.max(
+      0,
+      Math.min(maxScroll, this.cursorLine - Math.floor(bodyHeight / 2)),
+    );
   }
 
   scrollBy(delta: number): void {
@@ -416,6 +545,7 @@ export class FileViewerOverlay {
   private readonly tree: FileTreeModel;
   private readonly search: FileSearchModel;
   private readonly preview: PreviewModel;
+  private readonly previewSearch: PreviewSearchModel;
   private readonly commitChatContextPins: (pins: ContextPin[]) => void;
   private readonly done: (result: FileViewerResult) => void;
   private mode: ViewerMode = "tree";
@@ -453,6 +583,7 @@ export class FileViewerOverlay {
     this.tree = new FileTreeModel(cwd, files);
     this.search = new FileSearchModel(cwd, files);
     this.preview = new PreviewModel(files);
+    this.previewSearch = new PreviewSearchModel();
   }
 
   restoreState(state: FileViewerState | undefined): void {
@@ -465,12 +596,32 @@ export class FileViewerOverlay {
   }
 
   handleInput(data: string): void {
+    if (matchesKey(data, "ctrl+c")) {
+      if (this.dismissTransientMode()) {
+        this.tui.requestRender();
+      }
+      return;
+    }
+
+    if (matchesKey(data, "escape")) {
+      if (this.dismissTransientMode()) {
+        this.tui.requestRender();
+        return;
+      }
+      if (this.closePreview()) {
+        this.tui.requestRender();
+        return;
+      }
+      return;
+    }
+
     if (this.mode === "help") {
       this.handleHelpInput(data);
       return;
     }
 
     if (this.mode === "search" && this.handleSearchInput(data)) return;
+    if (this.previewSearch.isInput() && this.handlePreviewSearchInput(data)) return;
 
     if (matchesKey(data, "?")) {
       this.openHelp();
@@ -478,26 +629,8 @@ export class FileViewerOverlay {
       return;
     }
 
-    if (matchesKey(data, "ctrl+c")) {
-      this.finish();
-      return;
-    }
-
-    if (matchesKey(data, "escape")) {
-      if (this.preview.clearSelection()) {
-        this.tui.requestRender();
-        return;
-      }
-      if (this.preview.close()) {
-        this.tui.requestRender();
-        return;
-      }
-      this.finish();
-      return;
-    }
-
     if (matchesKey(data, "q")) {
-      if (this.preview.close()) {
+      if (this.closePreview()) {
         this.tui.requestRender();
         return;
       }
@@ -506,9 +639,31 @@ export class FileViewerOverlay {
     }
 
     if (data === "/") {
-      this.openSearch();
+      if (this.preview.isOpen()) {
+        this.openPreviewSearch();
+      } else {
+        this.openSearch();
+      }
       this.tui.requestRender();
       return;
+    }
+
+    if (data === "n") {
+      if (this.preview.isOpen() && this.previewSearch.canRepeat()) {
+        this.previewSearch.move(1);
+        this.previewSearch.jumpToSelected(this.preview);
+        this.tui.requestRender();
+        return;
+      }
+    }
+
+    if (data === "N") {
+      if (this.preview.isOpen() && this.previewSearch.canRepeat()) {
+        this.previewSearch.move(-1);
+        this.previewSearch.jumpToSelected(this.preview);
+        this.tui.requestRender();
+        return;
+      }
     }
 
     if (matchesKey(data, "up")) {
@@ -578,6 +733,7 @@ export class FileViewerOverlay {
       if (row?.isDirectory) {
         this.tree.expandSelected(() => {
           this.preview.close();
+          this.closePreviewSearch();
         });
       } else {
         this.openSelected();
@@ -588,11 +744,13 @@ export class FileViewerOverlay {
 
     if (matchesKey(data, "left") || matchesKey(data, "h")) {
       if (this.preview.close()) {
+        this.closePreviewSearch();
         this.tui.requestRender();
         return;
       }
       this.tree.collapseSelected(() => {
         this.preview.close();
+        this.closePreviewSearch();
       });
       this.tui.requestRender();
       return;
@@ -703,6 +861,43 @@ export class FileViewerOverlay {
     this.done({ ...result, state });
   }
 
+  private interactionMode(): InteractionMode {
+    if (this.mode === "help") return "help";
+    if (this.mode === "search") return "file-search";
+    if (this.previewSearch.isInput()) return "preview-search-input";
+    if (this.previewSearch.hasStatus()) return "preview-search-status";
+    if (this.preview.selectionAnchor !== undefined) return "preview-selection";
+    if (this.preview.isOpen()) return "preview";
+    return "browse";
+  }
+
+  private dismissTransientMode(): boolean {
+    switch (this.interactionMode()) {
+      case "help":
+        this.closeHelp();
+        return true;
+      case "file-search":
+        this.closeSearch();
+        return true;
+      case "preview-search-input":
+        this.closePreviewSearch();
+        return true;
+      case "preview-search-status":
+        return this.previewSearch.clearStatus();
+      case "preview-selection":
+        return this.preview.clearSelection();
+      case "preview":
+      case "browse":
+        return false;
+    }
+  }
+
+  private closePreview(): boolean {
+    const closed = this.preview.close();
+    if (closed) this.previewSearch.clear();
+    return closed;
+  }
+
   private handleHelpInput(data: string): boolean {
     if (matchesKey(data, "?") || matchesKey(data, "escape") || matchesKey(data, "q") || matchesKey(data, "enter")) {
       this.closeHelp();
@@ -738,12 +933,6 @@ export class FileViewerOverlay {
   }
 
   private handleSearchInput(data: string): boolean {
-    if (matchesKey(data, "ctrl+c") || matchesKey(data, "escape")) {
-      this.closeSearch();
-      this.tui.requestRender();
-      return true;
-    }
-
     if (matchesKey(data, "up")) {
       this.search.move(-1);
       this.tui.requestRender();
@@ -777,10 +966,39 @@ export class FileViewerOverlay {
     return false;
   }
 
+  private handlePreviewSearchInput(data: string): boolean {
+    if (matchesKey(data, "enter")) {
+      this.previewSearch.submit(this.preview);
+      this.tui.requestRender();
+      return true;
+    }
+
+    if (matchesKey(data, "backspace")) {
+      this.previewSearch.backspace(this.preview.cursorLine);
+      this.previewSearch.jumpToSelected(this.preview);
+      this.tui.requestRender();
+      return true;
+    }
+
+    if (isPrintableInput(data)) {
+      this.previewSearch.insert(data, this.preview.cursorLine);
+      this.previewSearch.jumpToSelected(this.preview);
+      this.tui.requestRender();
+      return true;
+    }
+
+    return true;
+  }
+
   private openSearch(): void {
     this.mode = "search";
     this.search.open();
-    this.preview.close();
+    this.closePreview();
+  }
+
+  private openPreviewSearch(): void {
+    if (!this.preview.previewData) return;
+    this.previewSearch.open(this.preview.previewData.fallbackLines, this.preview.cursorLine);
   }
 
   private openHelp(): void {
@@ -796,10 +1014,14 @@ export class FileViewerOverlay {
     this.helpScroll = 0;
   }
 
+  private closePreviewSearch(): void {
+    this.previewSearch.clear();
+  }
+
   private closeSearch(revealHit?: SearchHit): void {
     this.search.close();
     this.mode = "tree";
-    this.preview.close();
+    this.closePreview();
     if (!revealHit) return;
     if (revealHit.isDirectory) {
       this.tree.treeRoot = revealHit.fullPath;
@@ -824,10 +1046,12 @@ export class FileViewerOverlay {
     if (row.isDirectory) {
       this.tree.expandSelected(() => {
         this.preview.close();
+        this.closePreviewSearch();
       });
       return;
     }
 
+    this.previewSearch.clear();
     this.preview.open(row.fullPath);
     this.focusPinnedPreviewRange();
   }
@@ -1016,9 +1240,15 @@ export class FileViewerOverlay {
   }
 
   private renderPreviewPanel(width: number, height: number): string[] {
-    const bodyHeight = Math.max(1, height);
+    const showSearchFooter = this.previewSearch.shouldRenderFooter();
+    const footerHeight = showSearchFooter && height > 1 ? 1 : 0;
+    const bodyHeight = Math.max(1, height - footerHeight);
     this.preview.previewPageStep = Math.max(1, Math.floor(bodyHeight / 2));
-    this.preview.keepCursorVisible(bodyHeight);
+    if (showSearchFooter) {
+      this.preview.centerCursor(bodyHeight);
+    } else {
+      this.preview.keepCursorVisible(bodyHeight);
+    }
 
     const lineCount = this.preview.lineCount();
     const gutterWidth = Math.max(1, `${Math.max(1, lineCount)}`.length);
@@ -1045,7 +1275,18 @@ export class FileViewerOverlay {
       );
     }
 
+    if (footerHeight > 0) {
+      lines.push(this.renderPreviewSearchFooter(width));
+    }
+
     return lines;
+  }
+
+  private renderPreviewSearchFooter(width: number): string {
+    return this.theme.bg(
+      PREVIEW_BG,
+      fit(width, this.theme.fg("accent", this.previewSearch.footerText())),
+    );
   }
 
   private renderPreviewLine(

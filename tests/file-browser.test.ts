@@ -311,6 +311,191 @@ describe("PreviewModel", () => {
 });
 
 describe("FileViewerOverlay", () => {
+  it("searches inside the previewed file like vim and shows match status", () => {
+    const lines = [
+      "zero",
+      "beta first",
+      "two",
+      "three",
+      "four",
+      "five",
+      "six",
+      "seven",
+      "beta second",
+      "nine",
+      "ten",
+      "eleven",
+    ];
+    const files = new FakeFileRepository(
+      {
+        "/root": [entry("/root/file.ts", false)],
+      },
+      {
+        "/root/file.ts": {
+          rawText: lines.join("\n"),
+          fallbackLines: lines,
+          highlight: true,
+        },
+      },
+    );
+
+    const overlay = new FileViewerOverlay(
+      "/root",
+      { requestRender() {}, terminal: { rows: 10 } } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as never,
+      files,
+      [],
+      undefined,
+      () => {},
+      () => {},
+    );
+
+    overlay.handleInput("\r");
+    overlay.handleInput("/");
+    overlay.handleInput("b");
+    overlay.handleInput("e");
+
+    expect(overlay.render(80).join("\n")).toContain(" / be");
+    expect((overlay as any).preview.cursorLine).toBe(1);
+
+    overlay.handleInput("\r");
+    expect(overlay.render(80).join("\n")).toContain(" be 1/2");
+    expect((overlay as any).preview.cursorLine).toBe(1);
+    expect((overlay as any).preview.previewScroll).toBe(0);
+
+    overlay.handleInput("n");
+    overlay.render(80);
+    expect(overlay.render(80).join("\n")).toContain(" be 2/2");
+    expect((overlay as any).preview.cursorLine).toBe(8);
+    expect((overlay as any).preview.previewScroll).toBe(4);
+
+    overlay.handleInput("N");
+    expect(overlay.render(80).join("\n")).toContain(" be 1/2");
+    expect((overlay as any).preview.cursorLine).toBe(1);
+  });
+
+  it("uses ctrl+c to dismiss preview search status without closing the overlay", () => {
+    const files = new FakeFileRepository(
+      {
+        "/root": [entry("/root/file.ts", false)],
+      },
+      {
+        "/root/file.ts": {
+          rawText: "alpha\nbeta\ngamma",
+          fallbackLines: ["alpha", "beta", "gamma"],
+          highlight: true,
+        },
+      },
+    );
+    const results: unknown[] = [];
+
+    const overlay = new FileViewerOverlay(
+      "/root",
+      { requestRender() {}, terminal: { rows: 10 } } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as never,
+      files,
+      [],
+      undefined,
+      () => {},
+      (result) => {
+        results.push(result);
+      },
+    );
+
+    overlay.handleInput("\r");
+    overlay.handleInput("/");
+    overlay.handleInput("b");
+    overlay.handleInput("\r");
+    overlay.handleInput(String.fromCharCode(3));
+
+    expect((overlay as any).preview.isOpen()).toBe(true);
+    expect(overlay.render(80).join("\n")).not.toContain(" b 1/1");
+    expect(results).toEqual([]);
+  });
+
+  it("does not close the overlay with ctrl+c outside transient modes", () => {
+    const files = new FakeFileRepository({
+      "/root": [entry("/root/file.ts", false)],
+    });
+    const results: unknown[] = [];
+
+    const overlay = new FileViewerOverlay(
+      "/root",
+      { requestRender() {}, terminal: { rows: 20 } } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as never,
+      files,
+      [],
+      undefined,
+      () => {},
+      (result) => {
+        results.push(result);
+      },
+    );
+
+    overlay.handleInput(String.fromCharCode(3));
+    expect(results).toEqual([]);
+
+    overlay.handleInput("\r");
+    overlay.handleInput(String.fromCharCode(3));
+    expect((overlay as any).preview.isOpen()).toBe(true);
+    expect(results).toEqual([]);
+  });
+
+  it("uses ctrl+c to dismiss preview selection without closing the overlay", () => {
+    const files = new FakeFileRepository(
+      {
+        "/root": [entry("/root/file.ts", false)],
+      },
+      {
+        "/root/file.ts": {
+          rawText: "first\nsecond\nthird",
+          fallbackLines: ["first", "second", "third"],
+          highlight: true,
+        },
+      },
+    );
+    const results: unknown[] = [];
+
+    const overlay = new FileViewerOverlay(
+      "/root",
+      { requestRender() {}, terminal: { rows: 20 } } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as never,
+      files,
+      [],
+      undefined,
+      () => {},
+      (result) => {
+        results.push(result);
+      },
+    );
+
+    overlay.handleInput("\r");
+    overlay.handleInput("j");
+    overlay.handleInput("v");
+    overlay.handleInput("j");
+    overlay.handleInput(String.fromCharCode(3));
+
+    expect((overlay as any).preview.selectionAnchor).toBeUndefined();
+    expect((overlay as any).preview.isOpen()).toBe(true);
+    expect(results).toEqual([]);
+  });
+
   it("clears preview selection after toggling a preview range", () => {
     const files = new FakeFileRepository(
       {
@@ -474,7 +659,8 @@ describe("FileViewerOverlay", () => {
     first.handleInput("\r");
     first.handleInput("j");
     first.handleInput("j");
-    first.handleInput(String.fromCharCode(3));
+    first.handleInput("q");
+    first.handleInput("q");
 
     const second = new FileViewerOverlay(
       "/root",
@@ -495,8 +681,7 @@ describe("FileViewerOverlay", () => {
 
     expect((second as any).tree.treeRoot).toBe("/root/src");
     expect((second as any).tree.currentRow()?.fullPath).toBe("/root/src/b.ts");
-    expect((second as any).preview.previewPath).toBe("/root/src/b.ts");
-    expect((second as any).preview.cursorLine).toBe(2);
+    expect((second as any).preview.previewPath).toBeUndefined();
   });
 
   it("shows the pinned preview range again when reopening the file", () => {
