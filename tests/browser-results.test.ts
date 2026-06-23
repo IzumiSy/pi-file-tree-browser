@@ -5,7 +5,7 @@ import {
   normalizeBrowserResultRange,
   searchHitKey,
   type SearchHit,
-} from "../extensions/browser-results";
+} from "../extension/browser-results";
 
 describe("browser-results", () => {
   it("builds stable keys from path, range, and kind", () => {

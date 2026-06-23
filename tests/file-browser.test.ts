@@ -5,7 +5,7 @@ import {
   FileViewerOverlay,
   PreviewModel,
   type FileViewerState,
-} from "../extensions/file-browser";
+} from "../extension/file-browser";
 import {
   buildPinManagerItems,
   buildPinnedFileContextText,
@@ -14,12 +14,12 @@ import {
   removeContextPin,
   togglePinnedPin,
   type ContextPin,
-} from "../extensions/pinned-files";
+} from "../extension/pinned-files";
 import type {
   PreviewData,
   TrackedFile,
   TreeEntry,
-} from "../extensions/file-repository";
+} from "../extension/file-repository";
 
 class FakeFileRepository {
   constructor(

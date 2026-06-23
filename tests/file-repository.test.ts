@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { FileRepository } from "../extensions/file-repository";
+import { FileRepository } from "../extension/file-repository";
 
 describe("FileRepository", () => {
   it("lists directories before files", () => {
