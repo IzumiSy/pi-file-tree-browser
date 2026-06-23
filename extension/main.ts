@@ -93,14 +93,14 @@ export default function (pi: ExtensionAPI) {
     name: "set_file_browser_results",
     label: "Set File Browser Results",
     description: "Store a curated shortlist of file locations for inspection in /files-result",
-    promptSnippet: "Publish relevant file locations so the user can inspect them in the file browser",
+    promptSnippet: "Add relevant file locations so the user can inspect them in the file browser",
     promptGuidelines: [
       "Use set_file_browser_results after narrowing a task to a short list of relevant files or line ranges.",
       "Use set_file_browser_results once near the end of a turn, not for incremental search dumps.",
       "Use set_file_browser_results when the user would benefit from inspecting or pinning candidate locations in /files-result.",
     ],
     parameters: Type.Object({
-      title: Type.Optional(Type.String({ description: "Short label for the published result set" })),
+      title: Type.Optional(Type.String({ description: "Short label for the stored result set" })),
       results: Type.Array(
         Type.Object({
           path: Type.String({ description: "Path relative to cwd or absolute within cwd" }),
@@ -162,7 +162,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("files-result", {
-    description: "Open or clear the latest AI-published shortlist (/files-result or /files-result clear)",
+    description: "Open or clear the latest AI-provided shortlist (/files-result or /files-result clear)",
     handler: async (args, ctx) => {
       await handleFilesCommand(ctx, filesResultCommandMode(args));
     },
@@ -367,7 +367,7 @@ async function handleFilesCommand(
     ? getBrowserResults(ctx.cwd)
     : undefined;
   if (mode === "results" && !browserResults) {
-    ctx.ui.notify("No browser results. Ask pi to publish them first.", "info");
+    ctx.ui.notify("No browser results. Ask pi to add them first.", "info");
     return;
   }
 

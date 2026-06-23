@@ -1,9 +1,9 @@
 ---
-name: publish-browser-results
-description: Investigate a codebase task, narrow findings to a short curated list of relevant file locations, and publish them to the file browser with set_file_browser_results so the user can inspect and pin them.
+name: file-browser-shortlist
+description: Investigate a codebase task, narrow findings to a short curated list of relevant file locations, and send them to the file browser with set_file_browser_results so the user can inspect and pin them.
 ---
 
-# Publish Browser Results
+# File Browser Shortlist
 
 Use this skill when the user would benefit from browsing a curated shortlist of relevant code locations in the file browser instead of only reading an inline explanation.
 
@@ -40,12 +40,12 @@ The result set should help the user inspect the code, not dump every possible ma
    - Hard cap: 20 unless the user explicitly wants a broad sweep.
    - Include only locations that are likely relevant.
 
-3. Publish once.
+3. Send it once.
    - Call `set_file_browser_results` once near the end of the turn.
    - Do not spam incremental updates while still exploring.
 
 4. Explain briefly.
-   - Tell the user that results were published to `/files-result`.
+   - Tell the user that results were added to `/files-result`.
    - Summarize what the shortlist represents.
 
 ## Result quality rules
@@ -68,7 +68,7 @@ Avoid:
 - Include `startLine` when you know the relevant entry point.
 - Include `endLine` only when the range is small and meaningful.
 - Prefer tight ranges around a function, branch, or block.
-- If unsure, publish just the file path.
+- If unsure, add just the file path.
 
 Good:
 - one function
@@ -111,17 +111,17 @@ Call `set_file_browser_results` with:
 
 ## Response pattern
 
-After publishing results, tell the user:
+After setting the results, tell the user:
 - what the shortlist represents
 - that it is available in `/files-result`
 - what to inspect first
 
 Example phrasing:
-- `関連候補を /files-result に出しました。まずは auth.ts と session.ts の共有分岐を見るのが近道です。`
+- `関連候補を /files-result に入れました。まずは auth.ts と session.ts の共有分岐を見るのが近道です。`
 - `実装候補を /files-result にまとめました。必要ならそこから pin してください。`
 
 ## Fallback
 
 If `set_file_browser_results` is unavailable, continue normally:
 - give the shortlist inline
-- mention that browser publishing was not available
+- mention that browser results were not available

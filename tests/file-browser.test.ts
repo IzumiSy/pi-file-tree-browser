@@ -378,7 +378,7 @@ describe("FileViewerOverlay", () => {
     expect((overlay as any).preview.cursorLine).toBe(1);
   });
 
-  it("opens published browser results and jumps to the published line", () => {
+  it("opens stored browser results and jumps to the requested line", () => {
     const lines = ["first", "second", "third"];
     const files = new FakeFileRepository(
       {
@@ -440,7 +440,7 @@ describe("FileViewerOverlay", () => {
     expect(results).toEqual([]);
   });
 
-  it("keeps published result descriptions dim without styling file paths", () => {
+  it("keeps stored result descriptions dim without styling file paths", () => {
     const files = new FakeFileRepository({});
 
     const overlay = new FileViewerOverlay(
@@ -508,7 +508,7 @@ describe("FileViewerOverlay", () => {
     expect(row).not.toMatch(/\x1b\[0m +\x1b\[0m$/);
   });
 
-  it("navigates published browser results with j/k before entering filter mode", () => {
+  it("navigates stored browser results with j/k before entering filter mode", () => {
     const files = new FakeFileRepository(
       {
         "/root": [entry("/root/src", true)],
@@ -566,7 +566,7 @@ describe("FileViewerOverlay", () => {
     expect((overlay as any).preview.previewPath).toBe("/root/src/b.ts");
   });
 
-  it("closes published browser results with q instead of starting a filter", () => {
+  it("closes stored browser results with q instead of starting a filter", () => {
     const files = new FakeFileRepository({});
     const results: unknown[] = [];
 
@@ -1169,7 +1169,7 @@ describe("FileViewerOverlay", () => {
     expect(before[1]?.slice(0, 48)).toBe(after[1]?.slice(0, 48));
   });
 
-  it("shows published search results as a plain list before preview opens", () => {
+  it("shows stored search results as a plain list before preview opens", () => {
     const files = new FakeFileRepository(
       {
         "/root": [entry("/root/src", true)],
