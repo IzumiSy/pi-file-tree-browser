@@ -21,15 +21,19 @@ pi install git:github.com/IzumiSy/pi-file-tree-browser
 
 This extension is intended for TUI mode.
 
-### `/files`
+### Slash commands
 
-Opens the file browser.
+| Command | What it does |
+| --- | --- |
+| `/files` | Open the file browser rooted at the current working directory. |
+| `/files-result` | Open the latest AI-published shortlist of files or ranges. |
+| `/files-result clear` | Clear the latest AI-published shortlist. |
+| `/pins` | Review and remove pins queued for the next agent turn. |
+| `/pins clear` | Clear all queued pins. |
 
-Also available:
-- `/files-result`: open the latest AI-published shortlist
-- `/files-result clear`: clear the latest shortlist
+### Browser controls
 
-Main controls:
+These controls apply after opening `/files` or `/files-result`.
 
 - `j` / `k`, `↑` / `↓`: Move
 - `l` / `→`: Open directory / preview file
@@ -54,7 +58,7 @@ Pins are a lightweight way to tell pi, "this file or snippet matters for my next
 - Use **`v`** to mark the start of a range, move the cursor, press **`v`** again to mark the end, then press **`s`** to pin just that selection.
 - This is useful when you want the agent to focus on one function, one error-producing block, or a small relevant snippet instead of a whole file.
 
-### AI-published browser results
+### How `/files-result` works
 
 Extensions and skills can publish a curated shortlist of file locations through the `set_file_browser_results` tool.
 
