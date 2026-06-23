@@ -393,6 +393,7 @@ describe("FileViewerOverlay", () => {
         },
       },
     );
+    const results: unknown[] = [];
 
     const overlay = new FileViewerOverlay(
       "/root",
@@ -406,7 +407,7 @@ describe("FileViewerOverlay", () => {
       [],
       undefined,
       () => {},
-      () => {},
+      (result) => results.push(result),
     );
 
     overlay.openResults("Bug hunt", [
@@ -436,6 +437,7 @@ describe("FileViewerOverlay", () => {
     expect(renderedResults).toContain("Bug hunt (1)");
     expect(renderedResults).toContain("src/file.ts:2-3 │ shared guard");
     expect((overlay as any).preview.previewPath).toBeUndefined();
+    expect(results).toEqual([]);
   });
 
   it("keeps published result descriptions dim without styling file paths", () => {
@@ -564,6 +566,41 @@ describe("FileViewerOverlay", () => {
 
     expect(results).toHaveLength(1);
     expect(results[0]).toMatchObject({ kind: "close" });
+  });
+
+  it("uses q to step back from tracked search to the tree", () => {
+    const files = new FakeFileRepository(
+      {
+        "/root": [entry("/root/src", true), entry("/root/README.md", false)],
+      },
+      {},
+      [tracked("src", true), tracked("README.md")],
+    );
+    const results: unknown[] = [];
+
+    const overlay = new FileViewerOverlay(
+      "/root",
+      { requestRender() {}, terminal: { rows: 10 } } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as never,
+      files,
+      [],
+      undefined,
+      () => {},
+      (result) => results.push(result),
+    );
+
+    overlay.handleInput("/");
+    expect((overlay as any).activeScreen()).toBe("search");
+
+    overlay.handleInput("q");
+
+    expect((overlay as any).activeScreen()).toBe("tree");
+    expect(overlay.render(80).join("\n")).toContain("README.md");
+    expect(results).toEqual([]);
   });
 
   it("uses ctrl+c to dismiss preview search status without closing the overlay", () => {
@@ -1049,6 +1086,64 @@ describe("FileViewerOverlay", () => {
     expect(before.join("\n")).not.toContain("Ctrl+C: close");
     expect(before).toHaveLength(10);
     expect(before[1]?.slice(0, 48)).toBe(after[1]?.slice(0, 48));
+  });
+
+  it("shows published search results as a plain list before preview opens", () => {
+    const files = new FakeFileRepository(
+      {
+        "/root": [entry("/root/src", true)],
+        "/root/src": [entry("/root/src/very-long-file-name.ts", false)],
+      },
+      {
+        "/root/src/very-long-file-name.ts": {
+          rawText: "first\nsecond",
+          fallbackLines: ["first", "second"],
+          highlight: true,
+        },
+      },
+    );
+
+    const overlay = new FileViewerOverlay(
+      "/root",
+      { requestRender() {}, terminal: { rows: 10 } } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as never,
+      files,
+      [],
+      undefined,
+      () => {},
+      () => {},
+    );
+
+    overlay.openResults("Bug hunt", [
+      {
+        fullPath: "/root/src/very-long-file-name.ts",
+        relativePath: "src/very-long-file-name.ts",
+        score: 0,
+        isDirectory: false,
+        reason: "search result",
+      },
+    ]);
+
+    const beforeLines = overlay.render(80);
+    const before = beforeLines.join("\n");
+    expect(before).toContain("src/very-long-file-name.ts");
+    expect(before).toContain("search result");
+    expect(before).not.toContain("Description");
+
+    overlay.handleInput("\r");
+    const after = overlay.render(80);
+    expect(after).toHaveLength(10);
+
+    const stripAnsi = (line: string | undefined) => (line ?? "").replace(/\x1b\[[0-9;]*m/g, "");
+    const beforeLine = stripAnsi(beforeLines[1]);
+    const afterLine = stripAnsi(after[1]);
+    expect(beforeLine).toContain("src/very-long-file-name.ts │ search result");
+    expect(afterLine).toContain("src/very-long-file-name.ts │ search result");
+    expect(beforeLine.slice(0, 48)).toBe(afterLine.slice(0, 48));
   });
 
   it("reroots into directories from the main list", () => {

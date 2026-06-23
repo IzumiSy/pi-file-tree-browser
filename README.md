@@ -7,7 +7,7 @@ A pi TUI file browser extension.
 - Open a nerdtree-like file browser with `/files`
 - Navigate directories, preview files, and make quick edits inside the TUI
 - Fuzzy-search Git-tracked files
-- Auto-open AI-published result shortlists in TUI, or reopen them with `/files-result`
+- Capture AI-published result shortlists in TUI and reopen them with `/files-result`
 - Pin entire files or line ranges and pass them as high-priority context to the next agent turn
 - Review or remove pins with `/pins`, or clear everything with `/pins clear`
 
@@ -33,7 +33,8 @@ Main controls:
 
 - `j` / `k`, `↑` / `↓`: Move
 - `l` / `→`: Open directory / preview file
-- `h` / `←`: Go to parent directory / close preview
+- `h` / `←`: Go to parent directory, leave search, or close preview
+- `q`: Close the current screen, or close the browser from the root screen
 - `Enter`: Open file in the editor
 - `/`: Search files, or search inside the previewed file
 - `s`: Pin the current file or selected preview range
@@ -56,7 +57,7 @@ Pins are a lightweight way to tell pi, "this file or snippet matters for my next
 
 Extensions and skills can publish a curated shortlist of file locations through the `set_file_browser_results` tool.
 
-In TUI mode, that shortlist opens automatically when it is published. It also appears in the widget area and can be reopened with `/files-result`, where you can preview, edit, and pin the suggested files or ranges.
+In TUI mode, that shortlist is stored without opening automatically. If the input editor is empty, the extension prefills `/files-result` for you. The shortlist also appears in the widget area and can be reopened with `/files-result`, where you can preview, edit, and pin the suggested files or ranges.
 
 This package also ships a `publish-browser-results` skill for investigations that end by publishing a shortlist into the browser.
 

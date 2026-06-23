@@ -125,21 +125,21 @@ export default function (pi: ExtensionAPI) {
       const browserResults = getBrowserResults(ctx.cwd);
       updateBrowserResultsWidget(ctx, browserResults);
 
-      const autoOpened = !!browserResults && ctx.mode === "tui"
-        ? await openFileViewerOverlay(ctx, browserResults)
-        : false;
+      const editorPrefill = !!browserResults
+        ? prefillFilesResultCommand(ctx)
+        : "none";
 
       return {
         content: [{
           type: "text",
-          text: autoOpened
-            ? `Stored ${hits.length} results. Opened them in the file browser.`
+          text: editorPrefill === "prefilled"
+            ? `Stored ${hits.length} results. Loaded /files-result into the editor.`
             : `Stored ${hits.length} results. Open with /files-result.`,
         }],
         details: {
           storedCount: hits.length,
           title: latestBrowserResultsByCwd.title,
-          autoOpened,
+          editorPrefill,
         },
       };
     },
@@ -443,6 +443,20 @@ function updateBrowserResultsWidget(
     ],
     invalidate(): void {},
   }));
+}
+
+function prefillFilesResultCommand(
+  ctx: ExtensionContext,
+): "prefilled" | "kept-existing" | "none" {
+  if (!ctx.hasUI || ctx.mode !== "tui") return "none";
+
+  const current = ctx.ui.getEditorText().trim();
+  if (current.length > 0) {
+    return "kept-existing";
+  }
+
+  ctx.ui.setEditorText("/files-result");
+  return "prefilled";
 }
 
 async function openFileViewerOverlay(
