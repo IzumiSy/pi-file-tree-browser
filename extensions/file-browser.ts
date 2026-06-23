@@ -97,6 +97,7 @@ const HELP_LINES = [
   "Preview",
   "Ctrl+U/D   Move preview cursor by half a page",
   "n / N      Next / previous preview search match",
+  "o          Open previewed file in the tree view",
   "q          Close current screen or browser",
   "r          Reload directory",
   "Ctrl+C     Cancel current mode/selection",
@@ -885,6 +886,13 @@ export class FileViewerOverlay {
       return;
     }
 
+    if (matchesKey(data, "o")) {
+      if (this.openPreviewInTreeView()) {
+        this.tui.requestRender();
+      }
+      return;
+    }
+
     if (matchesKey(data, "v")) {
       if (this.activeScreen() !== "preview") return;
       if (this.preview.selectionAnchor !== undefined) {
@@ -939,8 +947,7 @@ export class FileViewerOverlay {
       if (width < 24) {
         lines.push(...this.renderSearchPanel(contentWidth, bodyRows, paddingX, contentWidth));
       } else {
-        const stableContentWidth = this.leftPanelWidth(contentWidth, 1);
-        lines.push(...this.renderSearchPanel(width, bodyRows, 0, stableContentWidth));
+        lines.push(...this.renderSearchPanel(width, bodyRows, 0, width));
       }
       return lines;
     }
@@ -1257,6 +1264,21 @@ export class FileViewerOverlay {
     this.focusPinnedPreviewRange();
   }
 
+  private openPreviewInTreeView(): boolean {
+    if (this.activeScreen() !== "preview") return false;
+    if (this.previousScreen() !== "search") return false;
+    if (!this.preview.previewPath) return false;
+
+    this.revealInTree(this.preview.previewPath);
+    const nextScreens = this.screens.filter((screen, index) =>
+      !(screen === "search" && index === this.screens.length - 2),
+    );
+    this.screens = nextScreens[0] === "tree"
+      ? nextScreens
+      : ["tree", ...nextScreens];
+    return true;
+  }
+
   private editPreviewedFile(): void {
     if (!this.preview.previewPath) return;
     this.finish({ kind: "edit", fullPath: this.preview.previewPath });
@@ -1330,7 +1352,7 @@ export class FileViewerOverlay {
     bg?: BgColor,
   ): Box {
     const box = bg
-      ? new Box(paddingX, 0, (text) => this.theme.bg(bg, text))
+      ? new Box(paddingX, 0, (text) => this.applyPersistentBackground(bg, text))
       : new Box(paddingX, 0);
     box.addChild(new Text(lines.map((line) => fit(width, line)).join("\n"), 0, 0));
     return box;
@@ -1347,7 +1369,7 @@ export class FileViewerOverlay {
       ? this.theme.fg("accent", row.label)
       : `${row.label}${marker}`;
     const line = fit(width, selected ? this.theme.bold(content) : content);
-    return this.theme.bg(selected ? FILE_SELECTION_BG : FILE_TREE_BG, line);
+    return this.applyPersistentBackground(selected ? FILE_SELECTION_BG : FILE_TREE_BG, line);
   }
 
   private renderSearchLine(
@@ -1364,7 +1386,7 @@ export class FileViewerOverlay {
     const content = `${label}${marker}`;
     const clipped = fit(contentWidth, selected ? this.theme.bold(content) : content);
     const line = clipped + " ".repeat(Math.max(0, width - contentWidth));
-    return this.theme.bg(selected ? FILE_SELECTION_BG : FILE_TREE_BG, line);
+    return this.applyPersistentBackground(selected ? FILE_SELECTION_BG : FILE_TREE_BG, line);
   }
 
   private renderSearchFileLabel(hit: SearchHit): string {
@@ -1545,7 +1567,7 @@ export class FileViewerOverlay {
   }
 
   private renderPreviewSearchFooter(width: number): string {
-    return this.theme.bg(
+    return this.applyPersistentBackground(
       PREVIEW_BG,
       fit(width, this.theme.fg("accent", this.previewSearch.footerText())),
     );
@@ -1576,7 +1598,23 @@ export class FileViewerOverlay {
     const prefixText = `${markerText} ${numberText} | `;
     const prefix = `${marker} ${this.theme.fg("muted", numberText)} | `;
     const content = `${prefix}${fit(Math.max(1, width - prefixText.length), line)}`;
-    return this.theme.bg(selected ? FILE_SELECTION_BG : PREVIEW_BG, fit(width, content));
+    return this.applyPersistentBackground(selected ? FILE_SELECTION_BG : PREVIEW_BG, fit(width, content));
+  }
+
+  private applyPersistentBackground(bg: BgColor, text: string): string {
+    const sentinel = "\u0000";
+    const styled = this.theme.bg(bg, sentinel);
+    const sentinelIndex = styled.indexOf(sentinel);
+    if (sentinelIndex === -1) {
+      return this.theme.bg(bg, text);
+    }
+
+    const prefix = styled.slice(0, sentinelIndex);
+    const suffix = styled.slice(sentinelIndex + sentinel.length);
+    const reapplied = prefix
+      ? text.replace(/\x1b\[0m/g, `\x1b[0m${prefix}`)
+      : text;
+    return `${prefix}${reapplied}${suffix}`;
   }
 
   private renderHelpLine(width: number, line = ""): string {

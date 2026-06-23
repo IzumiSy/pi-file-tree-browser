@@ -476,6 +476,38 @@ describe("FileViewerOverlay", () => {
     expect(rendered).toContain("[muted:shared guard]");
   });
 
+  it("keeps row background active after ansi resets in truncated search results", () => {
+    const files = new FakeFileRepository({});
+
+    const overlay = new FileViewerOverlay(
+      "/root",
+      { requestRender() {}, terminal: { rows: 10 } } as never,
+      {
+        fg: (_color: string, text: string) => `\x1b[35m${text}\x1b[0m`,
+        bg: (_color: string, text: string) => `\x1b[43m${text}\x1b[0m`,
+        bold: (text: string) => `\x1b[1m${text}\x1b[0m`,
+      } as never,
+      files,
+      [],
+      undefined,
+      () => {},
+      () => {},
+    );
+
+    overlay.openResults("Bug hunt", [
+      {
+        fullPath: "/root/src/a.ts",
+        relativePath: "src/a.ts",
+        score: 0,
+        isDirectory: false,
+        reason: "This is a very long description that should force truncation and would previously leave a black gap after an ANSI reset.",
+      },
+    ]);
+
+    const row = overlay.render(80)[1] ?? "";
+    expect(row).not.toMatch(/\x1b\[0m +\x1b\[0m$/);
+  });
+
   it("navigates published browser results with j/k before entering filter mode", () => {
     const files = new FakeFileRepository(
       {
@@ -601,6 +633,55 @@ describe("FileViewerOverlay", () => {
     expect((overlay as any).activeScreen()).toBe("tree");
     expect(overlay.render(80).join("\n")).toContain("README.md");
     expect(results).toEqual([]);
+  });
+
+  it("uses o to reopen a search-result preview in the tree view", () => {
+    const files = new FakeFileRepository(
+      {
+        "/root": [entry("/root/src", true)],
+        "/root/src": [entry("/root/src/file.ts", false)],
+      },
+      {
+        "/root/src/file.ts": {
+          rawText: "first\nsecond",
+          fallbackLines: ["first", "second"],
+          highlight: true,
+        },
+      },
+    );
+
+    const overlay = new FileViewerOverlay(
+      "/root",
+      { requestRender() {}, terminal: { rows: 10 } } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as never,
+      files,
+      [],
+      undefined,
+      () => {},
+      () => {},
+    );
+
+    overlay.openResults("Bug hunt", [
+      {
+        fullPath: "/root/src/file.ts",
+        relativePath: "src/file.ts",
+        score: 0,
+        isDirectory: false,
+      },
+    ]);
+    overlay.handleInput("\r");
+
+    expect((overlay as any).leftPanelScreen()).toBe("search");
+    overlay.handleInput("o");
+
+    expect((overlay as any).activeScreen()).toBe("preview");
+    expect((overlay as any).leftPanelScreen()).toBe("tree");
+    expect((overlay as any).tree.treeRoot).toBe("/root/src");
+    expect((overlay as any).tree.currentRow()?.fullPath).toBe("/root/src/file.ts");
   });
 
   it("uses ctrl+c to dismiss preview search status without closing the overlay", () => {
@@ -1143,6 +1224,7 @@ describe("FileViewerOverlay", () => {
     const afterLine = stripAnsi(after[1]);
     expect(beforeLine).toContain("src/very-long-file-name.ts │ search result");
     expect(afterLine).toContain("src/very-long-file-name.ts │ search result");
+    expect(beforeLine.length).toBeGreaterThan(afterLine.length);
     expect(beforeLine.slice(0, 48)).toBe(afterLine.slice(0, 48));
   });
 
