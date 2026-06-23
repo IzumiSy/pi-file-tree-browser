@@ -402,7 +402,7 @@ export class FileViewerOverlay {
       lines.push(...this.renderPreviewPanel(contentWidth, 5));
     } else {
       const gutterWidth = 1;
-      const leftWidth = this.leftPanelWidth(contentWidth, gutterWidth, "preview");
+      const leftWidth = this.leftPanelWidth(contentWidth, gutterWidth, leftPanelScreen);
       const rightWidth = Math.max(MIN_SPLIT_PANEL_WIDTH, contentWidth - gutterWidth - leftWidth);
       const leftLines = this.renderLeftPanel(leftPanelScreen, leftWidth, bodyRows, 0);
       const rightLines = this.renderPreviewPanel(rightWidth, bodyRows);
@@ -951,10 +951,10 @@ export class FileViewerOverlay {
   private leftPanelWidth(
     contentWidth: number,
     gutterWidth: number,
-    screen: "tree" | "preview",
+    screen: "tree" | "search",
   ): number {
     const availableWidth = Math.max(1, contentWidth - gutterWidth);
-    const ratio = screen === "preview" ? 0.5 : 0.25;
+    const ratio = screen === "search" ? 0.5 : 0.25;
     const minWidth = screen === "tree" ? MIN_TREE_PANEL_WIDTH : MIN_SPLIT_PANEL_WIDTH;
     const maxWidth = Math.max(minWidth, availableWidth - MIN_SPLIT_PANEL_WIDTH);
     return Math.max(minWidth, Math.min(maxWidth, Math.floor(availableWidth * ratio)));

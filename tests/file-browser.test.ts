@@ -1161,8 +1161,8 @@ describe("FileViewerOverlay", () => {
     expect((overlay as any).leftPanelWidth(78, 1, "tree")).toBe(25);
     expect((overlay as any).leftPanelWidth(58, 1, "tree")).toBe(25);
     expect((overlay as any).leftPanelWidth(98, 1, "tree")).toBe(25);
-    expect((overlay as any).leftPanelWidth(78, 1, "preview")).toBe(38);
-    expect((overlay as any).leftPanelWidth(58, 1, "preview")).toBe(28);
+    expect((overlay as any).leftPanelWidth(78, 1, "search")).toBe(38);
+    expect((overlay as any).leftPanelWidth(58, 1, "search")).toBe(28);
   });
 
   it("falls back to a full-width tree when the split cannot keep the minimum tree width", () => {
@@ -1188,7 +1188,7 @@ describe("FileViewerOverlay", () => {
     expect(overlay.render(32).join("\n")).toContain("very-long-file-name.ts");
   });
 
-  it("uses a narrower tree pane before preview opens and a wider one after", () => {
+  it("keeps the tree pane width when preview opens", () => {
     const files = new FakeFileRepository({
       "/root": [entry("/root/very-long-file-name.ts", false), entry("/root/b.ts", false)],
     });
@@ -1217,7 +1217,7 @@ describe("FileViewerOverlay", () => {
     expect(before.join("\n")).toContain("very-long-file-name");
     expect(before.join("\n")).not.toContain("Ctrl+C: close");
     expect(before).toHaveLength(10);
-    expect(treePaneWidth).toBeLessThan((overlay as any).leftPanelWidth(78, 1, "preview"));
+    expect(treePaneWidth).toBeLessThan((overlay as any).leftPanelWidth(78, 1, "search"));
     expect(before[1]?.slice(0, treePaneWidth)).toBe(after[1]?.slice(0, treePaneWidth));
   });
 
@@ -1271,7 +1271,7 @@ describe("FileViewerOverlay", () => {
     const after = overlay.render(80);
     expect(after).toHaveLength(10);
 
-    const treePaneWidth = (overlay as any).leftPanelWidth(78, 1, "preview");
+    const treePaneWidth = (overlay as any).leftPanelWidth(78, 1, "search");
     const stripAnsi = (line: string | undefined) => (line ?? "").replace(/\x1b\[[0-9;]*m/g, "");
     const beforeLine = stripAnsi(beforeLines[1]);
     const afterLine = stripAnsi(after[1]);
