@@ -438,6 +438,42 @@ describe("FileViewerOverlay", () => {
     expect((overlay as any).preview.previewPath).toBeUndefined();
   });
 
+  it("keeps published result descriptions dim without styling file paths", () => {
+    const files = new FakeFileRepository({});
+
+    const overlay = new FileViewerOverlay(
+      "/root",
+      { requestRender() {}, terminal: { rows: 10 } } as never,
+      {
+        fg: (color: string, text: string) => `[${color}:${text}]`,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => `<b>${text}</b>`,
+      } as never,
+      files,
+      [],
+      undefined,
+      () => {},
+      () => {},
+    );
+
+    overlay.openResults("Bug hunt", [
+      {
+        fullPath: "/root/src/a.ts",
+        relativePath: "src/a.ts",
+        score: 0,
+        isDirectory: false,
+        reason: "shared guard",
+      },
+    ]);
+
+    const rendered = overlay.render(80).join("\n");
+    expect(rendered).toContain("src/a.ts");
+    expect(rendered).not.toContain("<b>src/a.ts</b>");
+    expect(rendered).not.toContain("[muted:src/a.ts]");
+    expect(rendered).toContain("[muted: │ ]");
+    expect(rendered).toContain("[muted:shared guard]");
+  });
+
   it("navigates published browser results with j/k before entering filter mode", () => {
     const files = new FakeFileRepository(
       {
