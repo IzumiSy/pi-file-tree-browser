@@ -17,6 +17,7 @@
   ],
   "author": "IzumiSy",
   "license": "MIT",
+  "packageManager": "pnpm@11.8.0",
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.79.6",
     "@earendil-works/pi-tui": "^0.79.6",
