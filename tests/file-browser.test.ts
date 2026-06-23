@@ -422,7 +422,7 @@ describe("FileViewerOverlay", () => {
     ]);
 
     expect(overlay.render(80).join("\n")).toContain("Bug hunt (1)");
-    expect(overlay.render(80).join("\n")).toContain("src/file.ts:2-3 — shared guard");
+    expect(overlay.render(80).join("\n")).toContain("src/file.ts:2-3 │ shared guard");
 
     overlay.handleInput("\r");
 
@@ -434,7 +434,7 @@ describe("FileViewerOverlay", () => {
 
     const renderedResults = overlay.render(80).join("\n");
     expect(renderedResults).toContain("Bug hunt (1)");
-    expect(renderedResults).toContain("src/file.ts:2-3 — shared guard");
+    expect(renderedResults).toContain("src/file.ts:2-3 │ shared guard");
     expect((overlay as any).preview.previewPath).toBeUndefined();
   });
 

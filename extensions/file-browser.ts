@@ -1345,10 +1345,22 @@ export class FileViewerOverlay {
     const marker = hit.isDirectory ? "" : this.renderPinnedMarkers(hit.fullPath);
     const label = hit.isDirectory
       ? this.theme.fg("accent", `${hit.relativePath}/`)
-      : `${hit.relativePath}${formatSearchLocation(hit)}${hit.reason ? ` — ${hit.reason}` : ""}`;
+      : this.renderSearchFileLabel(hit);
     const content = `${label}${marker}`;
     const line = fit(width, selected ? this.theme.bold(content) : content);
     return this.theme.bg(selected ? FILE_SELECTION_BG : FILE_TREE_BG, line);
+  }
+
+  private renderSearchFileLabel(hit: SearchHit): string {
+    const dir = path.dirname(hit.relativePath);
+    const location = formatSearchLocation(hit);
+    const basename = `${path.basename(hit.relativePath)}${location}`;
+    const fileLabel = dir === "."
+      ? this.theme.bold(basename)
+      : `${this.theme.fg("muted", `${dir}/`)}${this.theme.bold(basename)}`;
+
+    if (!hit.reason) return fileLabel;
+    return `${fileLabel}${this.theme.fg("muted", " │ ")}${this.theme.fg("muted", hit.reason)}`;
   }
 
   private renderHeader(width: number, paddingX: number, contentWidth: number): string[] {
