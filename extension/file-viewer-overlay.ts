@@ -73,6 +73,8 @@ const HELP_LINES = [
 const FILE_SELECTION_BG: BgColor = "selectedBg";
 const FILE_TREE_BG: BgColor = "customMessageBg";
 const PREVIEW_BG: BgColor = "toolPendingBg";
+const MIN_SPLIT_PANEL_WIDTH = 10;
+const MIN_TREE_PANEL_WIDTH = 25;
 
 function getCachedLines(
   cache: RenderCache | undefined,
@@ -382,12 +384,12 @@ export class FileViewerOverlay {
     }
 
     if (activeScreen === "tree") {
-      if (width < 24) {
+      const gutterWidth = 1;
+      if (width < 24 || contentWidth < MIN_TREE_PANEL_WIDTH + gutterWidth + MIN_SPLIT_PANEL_WIDTH) {
         lines.push(...this.renderTreePanel(contentWidth, bodyRows, paddingX));
       } else {
-        const gutterWidth = 1;
-        const leftWidth = this.leftPanelWidth(contentWidth, gutterWidth);
-        const rightWidth = Math.max(10, contentWidth - gutterWidth - leftWidth);
+        const leftWidth = this.leftPanelWidth(contentWidth, gutterWidth, "tree");
+        const rightWidth = Math.max(MIN_SPLIT_PANEL_WIDTH, contentWidth - gutterWidth - leftWidth);
         const leftLines = this.renderTreePanel(leftWidth, bodyRows, 0);
         const rightLines = Array.from({ length: leftLines.length }, () => " ".repeat(rightWidth));
         lines.push(...this.joinColumns(leftLines, rightLines, gutterWidth));
@@ -400,8 +402,8 @@ export class FileViewerOverlay {
       lines.push(...this.renderPreviewPanel(contentWidth, 5));
     } else {
       const gutterWidth = 1;
-      const leftWidth = this.leftPanelWidth(contentWidth, gutterWidth);
-      const rightWidth = Math.max(10, contentWidth - gutterWidth - leftWidth);
+      const leftWidth = this.leftPanelWidth(contentWidth, gutterWidth, "preview");
+      const rightWidth = Math.max(MIN_SPLIT_PANEL_WIDTH, contentWidth - gutterWidth - leftWidth);
       const leftLines = this.renderLeftPanel(leftPanelScreen, leftWidth, bodyRows, 0);
       const rightLines = this.renderPreviewPanel(rightWidth, bodyRows);
       lines.push(...this.joinColumns(leftLines, rightLines, gutterWidth));
@@ -946,8 +948,16 @@ export class FileViewerOverlay {
       : this.renderTreePanel(width, height, paddingX);
   }
 
-  private leftPanelWidth(contentWidth: number, gutterWidth: number): number {
-    return Math.max(10, Math.min(48, contentWidth - gutterWidth));
+  private leftPanelWidth(
+    contentWidth: number,
+    gutterWidth: number,
+    screen: "tree" | "preview",
+  ): number {
+    const availableWidth = Math.max(1, contentWidth - gutterWidth);
+    const ratio = screen === "preview" ? 0.5 : 0.25;
+    const minWidth = screen === "tree" ? MIN_TREE_PANEL_WIDTH : MIN_SPLIT_PANEL_WIDTH;
+    const maxWidth = Math.max(minWidth, availableWidth - MIN_SPLIT_PANEL_WIDTH);
+    return Math.max(minWidth, Math.min(maxWidth, Math.floor(availableWidth * ratio)));
   }
 
   private renderPreviewPanel(width: number, height: number): string[] {

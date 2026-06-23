@@ -1138,7 +1138,7 @@ describe("FileViewerOverlay", () => {
     expect(committed).toEqual([[filePin("/root/file.ts")]]);
   });
 
-  it("keeps the tree pane in a stable split layout before and after preview opens", () => {
+  it("sizes the tree pane from the available width", () => {
     const files = new FakeFileRepository({
       "/root": [entry("/root/very-long-file-name.ts", false), entry("/root/b.ts", false)],
     });
@@ -1158,15 +1158,67 @@ describe("FileViewerOverlay", () => {
       () => {},
     );
 
+    expect((overlay as any).leftPanelWidth(78, 1, "tree")).toBe(25);
+    expect((overlay as any).leftPanelWidth(58, 1, "tree")).toBe(25);
+    expect((overlay as any).leftPanelWidth(98, 1, "tree")).toBe(25);
+    expect((overlay as any).leftPanelWidth(78, 1, "preview")).toBe(38);
+    expect((overlay as any).leftPanelWidth(58, 1, "preview")).toBe(28);
+  });
+
+  it("falls back to a full-width tree when the split cannot keep the minimum tree width", () => {
+    const files = new FakeFileRepository({
+      "/root": [entry("/root/very-long-file-name.ts", false), entry("/root/b.ts", false)],
+    });
+
+    const overlay = new FileViewerOverlay(
+      "/root",
+      { requestRender() {}, terminal: { rows: 10 } } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as never,
+      files,
+      [],
+      undefined,
+      () => {},
+      () => {},
+    );
+
+    expect(overlay.render(32).join("\n")).toContain("very-long-file-name.ts");
+  });
+
+  it("uses a narrower tree pane before preview opens and a wider one after", () => {
+    const files = new FakeFileRepository({
+      "/root": [entry("/root/very-long-file-name.ts", false), entry("/root/b.ts", false)],
+    });
+
+    const overlay = new FileViewerOverlay(
+      "/root",
+      { requestRender() {}, terminal: { rows: 10 } } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as never,
+      files,
+      [],
+      undefined,
+      () => {},
+      () => {},
+    );
+
+    const treePaneWidth = (overlay as any).leftPanelWidth(78, 1, "tree");
     const before = overlay.render(80);
     overlay.handleInput("\r");
     const after = overlay.render(80);
 
     expect(before[0]).toContain("q close • ? help");
-    expect(before.join("\n")).toContain("very-long-file-name.ts");
+    expect(before.join("\n")).toContain("very-long-file-name");
     expect(before.join("\n")).not.toContain("Ctrl+C: close");
     expect(before).toHaveLength(10);
-    expect(before[1]?.slice(0, 48)).toBe(after[1]?.slice(0, 48));
+    expect(treePaneWidth).toBeLessThan((overlay as any).leftPanelWidth(78, 1, "preview"));
+    expect(before[1]?.slice(0, treePaneWidth)).toBe(after[1]?.slice(0, treePaneWidth));
   });
 
   it("shows stored search results as a plain list before preview opens", () => {
@@ -1219,13 +1271,13 @@ describe("FileViewerOverlay", () => {
     const after = overlay.render(80);
     expect(after).toHaveLength(10);
 
+    const treePaneWidth = (overlay as any).leftPanelWidth(78, 1, "preview");
     const stripAnsi = (line: string | undefined) => (line ?? "").replace(/\x1b\[[0-9;]*m/g, "");
     const beforeLine = stripAnsi(beforeLines[1]);
     const afterLine = stripAnsi(after[1]);
     expect(beforeLine).toContain("src/very-long-file-name.ts │ search result");
-    expect(afterLine).toContain("src/very-long-file-name.ts │ search result");
     expect(beforeLine.length).toBeGreaterThan(afterLine.length);
-    expect(beforeLine.slice(0, 48)).toBe(afterLine.slice(0, 48));
+    expect(beforeLine.slice(0, treePaneWidth)).toBe(afterLine.slice(0, treePaneWidth));
   });
 
   it("reroots into directories from the main list", () => {
