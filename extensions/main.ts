@@ -16,10 +16,15 @@ import {
 import { Type } from "typebox";
 
 import {
+  isWithin,
+  normalizeBrowserResultRange,
+  searchHitKey,
+  type SearchHit,
+} from "./browser-results";
+import {
   FileViewerOverlay,
   type FileViewerResult,
   type FileViewerState,
-  type SearchHit,
 } from "./file-browser";
 import { FileRepository } from "./file-repository";
 import {
@@ -332,42 +337,10 @@ function normalizeBrowserResults(
       ...range,
       ...(result.reason?.trim() ? { reason: result.reason.trim() } : {}),
     };
-    deduped.set(browserResultKey(hit), hit);
+    deduped.set(searchHitKey(hit), hit);
   }
 
   return [...deduped.values()];
-}
-
-function normalizeBrowserResultRange(
-  startLine: number | undefined,
-  endLine: number | undefined,
-  allowRange: boolean,
-): Partial<Pick<SearchHit, "startLine" | "endLine">> {
-  if (!allowRange) return {};
-
-  const start = normalizePositiveInteger(startLine);
-  const end = normalizePositiveInteger(endLine);
-  if (start === undefined) return {};
-  if (end === undefined || end === start) return { startLine: start };
-
-  return start < end
-    ? { startLine: start, endLine: end }
-    : { startLine: end, endLine: start };
-}
-
-function normalizePositiveInteger(value: number | undefined): number | undefined {
-  if (value === undefined || !Number.isFinite(value)) return undefined;
-  const normalized = Math.trunc(value);
-  return normalized > 0 ? normalized : undefined;
-}
-
-function browserResultKey(hit: SearchHit): string {
-  return `${hit.fullPath}:${hit.startLine ?? ""}:${hit.endLine ?? ""}:${hit.isDirectory ? "dir" : "file"}`;
-}
-
-function isWithin(target: string, base: string): boolean {
-  const relativePath = path.relative(base, target);
-  return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
 }
 
 async function handleFilesCommand(

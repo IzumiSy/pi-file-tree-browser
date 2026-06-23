@@ -6,6 +6,11 @@ import { type Theme } from "@earendil-works/pi-coding-agent";
 import { Box, matchesKey, Text, type TUI } from "@earendil-works/pi-tui";
 
 import {
+  isWithin,
+  searchHitKey,
+  type SearchHit,
+} from "./browser-results";
+import {
   type FileRepository,
   type PreviewData,
   type TrackedFile,
@@ -35,16 +40,6 @@ export type TreeRow = {
   fullPath: string;
   label: string;
   isDirectory: boolean;
-};
-
-export type SearchHit = {
-  fullPath: string;
-  relativePath: string;
-  score: number;
-  isDirectory: boolean;
-  startLine?: number;
-  endLine?: number;
-  reason?: string;
 };
 
 type PublishedResultsState = {
@@ -1750,16 +1745,7 @@ function formatSearchLocation(hit: SearchHit): string {
   return `:${hit.startLine}-${hit.endLine}`;
 }
 
-function searchHitKey(hit: SearchHit): string {
-  return `${hit.fullPath}:${hit.startLine ?? ""}:${hit.endLine ?? ""}:${hit.isDirectory ? "dir" : "file"}`;
-}
-
 function isPrintableInput(data: string): boolean {
   return data.length > 0 && !/[\x00-\x1f\x7f]/.test(data);
-}
-
-function isWithin(target: string, base: string): boolean {
-  const relativePath = path.relative(base, target);
-  return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
 }
 
