@@ -2,6 +2,8 @@
 
 A pi TUI file browser extension.
 
+![Demo](assets/demo.gif)
+
 ## Features
 
 - Open a nerdtree-like file browser with `/files`
