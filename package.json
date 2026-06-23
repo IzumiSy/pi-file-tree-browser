@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "A pi TUI file browser extension.",
   "scripts": {
-    "dev": "pi -e extensions/main.ts",
+    "dev": "pi --no-extensions -e extensions/main.ts",
     "type-check": "tsc -b --noEmit",
     "test": "vitest run"
   },
