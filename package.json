@@ -9,9 +9,12 @@
   },
   "files": [
     "extensions/",
+    "skills/",
     "README.md"
   ],
-  "keywords": [],
+  "keywords": [
+    "pi-package"
+  ],
   "author": "IzumiSy",
   "license": "MIT",
   "devDependencies": {
@@ -24,6 +27,9 @@
   "pi": {
     "extensions": [
       "./extensions/main.ts"
+    ],
+    "skills": [
+      "./skills"
     ]
   },
   "dependencies": {

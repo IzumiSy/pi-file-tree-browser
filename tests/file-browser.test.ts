@@ -378,6 +378,158 @@ describe("FileViewerOverlay", () => {
     expect((overlay as any).preview.cursorLine).toBe(1);
   });
 
+  it("opens published browser results and jumps to the published line", () => {
+    const lines = ["first", "second", "third"];
+    const files = new FakeFileRepository(
+      {
+        "/root": [entry("/root/src", true)],
+        "/root/src": [entry("/root/src/file.ts", false)],
+      },
+      {
+        "/root/src/file.ts": {
+          rawText: lines.join("\n"),
+          fallbackLines: lines,
+          highlight: true,
+        },
+      },
+    );
+
+    const overlay = new FileViewerOverlay(
+      "/root",
+      { requestRender() {}, terminal: { rows: 10 } } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as never,
+      files,
+      [],
+      undefined,
+      () => {},
+      () => {},
+    );
+
+    overlay.openResults("Bug hunt", [
+      {
+        fullPath: "/root/src/file.ts",
+        relativePath: "src/file.ts",
+        score: 0,
+        isDirectory: false,
+        startLine: 2,
+        endLine: 3,
+        reason: "shared guard",
+      },
+    ]);
+
+    expect(overlay.render(80).join("\n")).toContain("Bug hunt (1)");
+    expect(overlay.render(80).join("\n")).toContain("src/file.ts:2-3 — shared guard");
+
+    overlay.handleInput("\r");
+
+    expect((overlay as any).tree.treeRoot).toBe("/root/src");
+    expect((overlay as any).preview.previewPath).toBe("/root/src/file.ts");
+    expect((overlay as any).preview.cursorLine).toBe(1);
+
+    overlay.handleInput("q");
+
+    const renderedResults = overlay.render(80).join("\n");
+    expect(renderedResults).toContain("Bug hunt (1)");
+    expect(renderedResults).toContain("src/file.ts:2-3 — shared guard");
+    expect((overlay as any).preview.previewPath).toBeUndefined();
+  });
+
+  it("navigates published browser results with j/k before entering filter mode", () => {
+    const files = new FakeFileRepository(
+      {
+        "/root": [entry("/root/src", true)],
+        "/root/src": [entry("/root/src/a.ts", false), entry("/root/src/b.ts", false)],
+      },
+      {
+        "/root/src/a.ts": {
+          rawText: "first",
+          fallbackLines: ["first"],
+          highlight: true,
+        },
+        "/root/src/b.ts": {
+          rawText: "second",
+          fallbackLines: ["second"],
+          highlight: true,
+        },
+      },
+    );
+
+    const overlay = new FileViewerOverlay(
+      "/root",
+      { requestRender() {}, terminal: { rows: 10 } } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as never,
+      files,
+      [],
+      undefined,
+      () => {},
+      () => {},
+    );
+
+    overlay.openResults("Bug hunt", [
+      {
+        fullPath: "/root/src/a.ts",
+        relativePath: "src/a.ts",
+        score: 0,
+        isDirectory: false,
+      },
+      {
+        fullPath: "/root/src/b.ts",
+        relativePath: "src/b.ts",
+        score: 0,
+        isDirectory: false,
+      },
+    ]);
+
+    expect(overlay.render(80).join("\n")).toContain("Bug hunt (2)");
+
+    overlay.handleInput("j");
+    overlay.handleInput("\r");
+
+    expect((overlay as any).preview.previewPath).toBe("/root/src/b.ts");
+  });
+
+  it("closes published browser results with q instead of starting a filter", () => {
+    const files = new FakeFileRepository({});
+    const results: unknown[] = [];
+
+    const overlay = new FileViewerOverlay(
+      "/root",
+      { requestRender() {}, terminal: { rows: 10 } } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as never,
+      files,
+      [],
+      undefined,
+      () => {},
+      (result) => results.push(result),
+    );
+
+    overlay.openResults("Bug hunt", [
+      {
+        fullPath: "/root/README.md",
+        relativePath: "README.md",
+        score: 0,
+        isDirectory: false,
+      },
+    ]);
+
+    overlay.handleInput("q");
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ kind: "close" });
+  });
+
   it("uses ctrl+c to dismiss preview search status without closing the overlay", () => {
     const files = new FakeFileRepository(
       {
@@ -856,7 +1008,7 @@ describe("FileViewerOverlay", () => {
     overlay.handleInput("\r");
     const after = overlay.render(80);
 
-    expect(before[0]).toContain("Press ? for help");
+    expect(before[0]).toContain("q close • ? help");
     expect(before.join("\n")).toContain("very-long-file-name.ts");
     expect(before.join("\n")).not.toContain("Ctrl+C: close");
     expect(before).toHaveLength(10);

@@ -42,6 +42,28 @@ export type SearchHit = {
   relativePath: string;
   score: number;
   isDirectory: boolean;
+  startLine?: number;
+  endLine?: number;
+  reason?: string;
+};
+
+type PublishedResultsState = {
+  title: string;
+  results: SearchHit[];
+  query: string;
+  inputActive: boolean;
+  selectedKey: string | undefined;
+  scroll: number;
+};
+
+type SearchSourceItem = {
+  fullPath: string;
+  relativePath: string;
+  baseName: string;
+  isDirectory: boolean;
+  startLine?: number;
+  endLine?: number;
+  reason?: string;
 };
 
 type BgColor = "selectedBg" | "customMessageBg" | "toolPendingBg";
@@ -54,6 +76,8 @@ type InteractionMode =
   | "preview-selection"
   | "preview"
   | "browse";
+
+type SearchSourceKind = "tracked" | "results";
 
 const TREE_PAGE_STEP = 4;
 
@@ -173,6 +197,10 @@ export class FileSearchModel {
   scroll = 0;
   version = 0;
   active = false;
+  private kind: SearchSourceKind = "tracked";
+  private title = "tracked files";
+  private inputActive = false;
+  private sourceItems: SearchSourceItem[] = [];
   private trackedFiles: TrackedFile[] = [];
 
   constructor(
@@ -189,7 +217,30 @@ export class FileSearchModel {
     this.query = "";
     this.selected = 0;
     this.scroll = 0;
+    this.kind = "tracked";
+    this.title = "tracked files";
+    this.inputActive = true;
     this.refresh();
+  }
+
+  openResults(results: ReadonlyArray<SearchHit>, title = "AI results"): void {
+    this.active = true;
+    this.query = "";
+    this.selected = 0;
+    this.scroll = 0;
+    this.kind = "results";
+    this.title = title;
+    this.inputActive = false;
+    this.sourceItems = results.map((result) => ({
+      fullPath: result.fullPath,
+      relativePath: result.relativePath,
+      baseName: path.basename(result.relativePath),
+      isDirectory: result.isDirectory,
+      ...(result.startLine === undefined ? {} : { startLine: result.startLine }),
+      ...(result.endLine === undefined ? {} : { endLine: result.endLine }),
+      ...(result.reason ? { reason: result.reason } : {}),
+    }));
+    this.recompute();
   }
 
   close(): boolean {
@@ -199,13 +250,68 @@ export class FileSearchModel {
     this.results = [];
     this.selected = 0;
     this.scroll = 0;
+    this.inputActive = false;
+    this.sourceItems = [];
     this.version += 1;
     return true;
   }
 
   refresh(force = false): void {
     this.trackedFiles = this.files.listTrackedFiles(this.cwd, force);
+    if (this.kind !== "tracked") return;
+
+    this.sourceItems = this.trackedFiles.map((file) => ({
+      fullPath: file.fullPath,
+      relativePath: file.relativePath,
+      baseName: file.baseName,
+      isDirectory: file.isDirectory,
+    }));
     this.recompute();
+  }
+
+  headerText(): string {
+    if (this.kind === "results" && !this.inputActive && this.query.length === 0) {
+      return ` ${this.title} (${this.results.length})`;
+    }
+    return ` / ${this.query} (${this.results.length})`;
+  }
+
+  isInputActive(): boolean {
+    return this.inputActive;
+  }
+
+  beginInput(): void {
+    if (this.inputActive) return;
+    this.inputActive = true;
+    this.version += 1;
+  }
+
+  isPublishedResults(): boolean {
+    return this.kind === "results";
+  }
+
+  snapshotPublishedResultsState(): PublishedResultsState | undefined {
+    if (this.kind !== "results") return undefined;
+    return {
+      title: this.title,
+      results: this.baseResults(),
+      query: this.query,
+      inputActive: this.inputActive,
+      selectedKey: this.currentResult() ? searchHitKey(this.currentResult()!) : undefined,
+      scroll: this.scroll,
+    };
+  }
+
+  restorePublishedResultsState(state: PublishedResultsState): void {
+    this.openResults(state.results, state.title);
+    this.query = state.query;
+    this.inputActive = state.inputActive;
+    const selectedHit = state.selectedKey
+      ? state.results.find((hit) => searchHitKey(hit) === state.selectedKey)
+      : undefined;
+    this.recompute(selectedHit);
+    this.scroll = Math.min(state.scroll, Math.max(0, this.results.length - 1));
+    this.version += 1;
   }
 
   move(delta: number): void {
@@ -223,6 +329,9 @@ export class FileSearchModel {
   backspace(): void {
     if (this.query.length === 0) return;
     this.query = this.query.slice(0, -1);
+    if (this.query.length === 0 && this.kind === "results") {
+      this.inputActive = false;
+    }
     this.recompute();
   }
 
@@ -236,37 +345,48 @@ export class FileSearchModel {
     if (this.scroll !== previous) this.version += 1;
   }
 
-  private recompute(selectedPath = this.currentResult()?.fullPath): void {
+  private recompute(selectedHit = this.currentResult()): void {
     const query = this.query.trim();
     this.results = query.length === 0
-      ? [...this.trackedFiles]
-          .sort((a, b) => a.relativePath.localeCompare(b.relativePath))
-          .map((file) => ({
-            fullPath: file.fullPath,
-            relativePath: file.relativePath,
-            score: 0,
-            isDirectory: file.isDirectory,
-          }))
+      ? this.baseResults()
       : fuzzysort
-          .go(query, this.trackedFiles, {
+          .go(query, this.sourceItems, {
             keys: SEARCH_KEYS,
             scoreFn: (result) =>
-              Math.max((result[0]?.score ?? 0) + BASENAME_SCORE_BOOST, result[1]?.score ?? 0),
+              Math.max(
+                (result[0]?.score ?? Number.NEGATIVE_INFINITY) + BASENAME_SCORE_BOOST,
+                result[1]?.score ?? Number.NEGATIVE_INFINITY,
+                result[2]?.score ?? Number.NEGATIVE_INFINITY,
+              ),
           })
-          .map((result) => ({
-            fullPath: result.obj.fullPath,
-            relativePath: result.obj.relativePath,
-            score: result.score,
-            isDirectory: result.obj.isDirectory,
-          }));
+          .map((result) => this.toSearchHit(result.obj, result.score));
 
-    this.selected = findSearchIndex(this.results, selectedPath);
+    this.selected = findSearchIndex(this.results, selectedHit);
     this.scroll = Math.min(this.scroll, Math.max(0, this.results.length - 1));
     this.version += 1;
   }
+
+  private baseResults(): SearchHit[] {
+    const items = this.kind === "tracked"
+      ? [...this.sourceItems].sort((a, b) => a.relativePath.localeCompare(b.relativePath))
+      : this.sourceItems;
+    return items.map((item) => this.toSearchHit(item));
+  }
+
+  private toSearchHit(item: SearchSourceItem, score = 0): SearchHit {
+    return {
+      fullPath: item.fullPath,
+      relativePath: item.relativePath,
+      score,
+      isDirectory: item.isDirectory,
+      ...(item.startLine === undefined ? {} : { startLine: item.startLine }),
+      ...(item.endLine === undefined ? {} : { endLine: item.endLine }),
+      ...(item.reason ? { reason: item.reason } : {}),
+    };
+  }
 }
 
-const SEARCH_KEYS = ["baseName", "relativePath"] as const;
+const SEARCH_KEYS = ["baseName", "relativePath", "reason"] as const;
 const BASENAME_SCORE_BOOST = 0.2;
 
 type RenderCache = {
@@ -551,6 +671,7 @@ export class FileViewerOverlay {
   private mode: ViewerMode = "tree";
   private treePageStep = TREE_PAGE_STEP;
   private previousMode: Exclude<ViewerMode, "help"> = "tree";
+  private returnToPublishedResults: PublishedResultsState | undefined;
   private helpScroll = 0;
   private helpPageStep = 1;
   private headerCache: RenderCache | undefined;
@@ -593,6 +714,13 @@ export class FileViewerOverlay {
     this.tree.reload(state.selectedPath ?? state.previewPath ?? this.tree.treeRoot);
     this.tree.scroll = Math.max(0, Math.min(state.treeScroll, Math.max(0, this.tree.rows.length - 1)));
     this.preview.restoreState(state);
+  }
+
+  openResults(title: string, results: ReadonlyArray<SearchHit>): void {
+    this.mode = "search";
+    this.search.openResults(results, title);
+    this.closePreview();
+    this.closePreviewSearch();
   }
 
   handleInput(data: string): void {
@@ -900,8 +1028,15 @@ export class FileViewerOverlay {
 
   private closePreview(): boolean {
     const closed = this.preview.close();
-    if (closed) this.previewSearch.clear();
-    return closed;
+    if (!closed) return false;
+
+    this.previewSearch.clear();
+    if (this.returnToPublishedResults) {
+      this.search.restorePublishedResultsState(this.returnToPublishedResults);
+      this.returnToPublishedResults = undefined;
+      this.mode = "search";
+    }
+    return true;
   }
 
   private handleHelpInput(data: string): boolean {
@@ -939,6 +1074,8 @@ export class FileViewerOverlay {
   }
 
   private handleSearchInput(data: string): boolean {
+    const browsingPublishedResults = this.search.isPublishedResults() && !this.search.isInputActive();
+
     if (matchesKey(data, "up")) {
       this.search.move(-1);
       this.tui.requestRender();
@@ -951,19 +1088,55 @@ export class FileViewerOverlay {
       return true;
     }
 
-    if (matchesKey(data, "enter")) {
+    if (browsingPublishedResults && matchesKey(data, "ctrl+u")) {
+      this.search.move(-this.treePageStep);
+      this.tui.requestRender();
+      return true;
+    }
+
+    if (browsingPublishedResults && matchesKey(data, "ctrl+d")) {
+      this.search.move(this.treePageStep);
+      this.tui.requestRender();
+      return true;
+    }
+
+    if (browsingPublishedResults && matchesKey(data, "k")) {
+      this.search.move(-1);
+      this.tui.requestRender();
+      return true;
+    }
+
+    if (browsingPublishedResults && matchesKey(data, "j")) {
+      this.search.move(1);
+      this.tui.requestRender();
+      return true;
+    }
+
+    if (matchesKey(data, "enter") || (browsingPublishedResults && (matchesKey(data, "right") || matchesKey(data, "l")))) {
       this.closeSearch(this.search.currentResult());
       this.tui.requestRender();
       return true;
     }
 
     if (matchesKey(data, "backspace")) {
+      if (!this.search.isInputActive()) return true;
       this.search.backspace();
       this.tui.requestRender();
       return true;
     }
 
+    if (data === "/" && !this.search.isInputActive()) {
+      this.search.beginInput();
+      this.tui.requestRender();
+      return true;
+    }
+
+    if (browsingPublishedResults) {
+      return false;
+    }
+
     if (isPrintableInput(data)) {
+      this.search.beginInput();
       this.search.insert(data);
       this.tui.requestRender();
       return true;
@@ -1000,6 +1173,7 @@ export class FileViewerOverlay {
     this.mode = "search";
     this.search.open();
     this.closePreview();
+    this.closePreviewSearch();
   }
 
   private openPreviewSearch(): void {
@@ -1025,6 +1199,9 @@ export class FileViewerOverlay {
   }
 
   private closeSearch(revealHit?: SearchHit): void {
+    this.returnToPublishedResults = revealHit && !revealHit.isDirectory && this.search.isPublishedResults()
+      ? this.search.snapshotPublishedResultsState()
+      : undefined;
     this.search.close();
     this.mode = "tree";
     this.closePreview();
@@ -1036,6 +1213,10 @@ export class FileViewerOverlay {
     }
     this.revealInTree(revealHit.fullPath);
     this.preview.open(revealHit.fullPath);
+    if (revealHit.startLine !== undefined) {
+      this.preview.focusLine(revealHit.startLine - 1);
+      return;
+    }
     this.focusPinnedPreviewRange();
   }
 
@@ -1164,7 +1345,7 @@ export class FileViewerOverlay {
     const marker = hit.isDirectory ? "" : this.renderPinnedMarkers(hit.fullPath);
     const label = hit.isDirectory
       ? this.theme.fg("accent", `${hit.relativePath}/`)
-      : hit.relativePath;
+      : `${hit.relativePath}${formatSearchLocation(hit)}${hit.reason ? ` — ${hit.reason}` : ""}`;
     const content = `${label}${marker}`;
     const line = fit(width, selected ? this.theme.bold(content) : content);
     return this.theme.bg(selected ? FILE_SELECTION_BG : FILE_TREE_BG, line);
@@ -1172,11 +1353,15 @@ export class FileViewerOverlay {
 
   private renderHeader(width: number, paddingX: number, contentWidth: number): string[] {
     const leftText = this.mode === "search"
-      ? ` / ${this.search.query || ""} (${this.search.results.length})`
+      ? this.search.headerText()
       : this.mode === "help"
         ? " help"
         : ` ${this.tree.treeRoot}`;
-    const rightText = "Press ? for help";
+    const rightText = this.mode === "help"
+      ? "q close help"
+      : this.preview.isOpen()
+        ? "q back • ? help"
+        : "q close • ? help";
     const leftWidth = Math.max(1, contentWidth - rightText.length - 1);
     const line = `${this.theme.fg("muted", fit(leftWidth, leftText))} ${this.theme.fg("accent", rightText)}`;
     const key = `${width}:${paddingX}:${contentWidth}:${this.mode}:${leftText}`;
@@ -1468,10 +1653,23 @@ function findRowIndex(rows: TreeRow[], fullPath: string): number {
   return 0;
 }
 
-function findSearchIndex(results: SearchHit[], fullPath: string | undefined): number {
-  if (!fullPath) return 0;
-  const index = results.findIndex((result) => result.fullPath === fullPath);
+function findSearchIndex(results: SearchHit[], target: SearchHit | undefined): number {
+  if (!target) return 0;
+  const targetKey = searchHitKey(target);
+  const index = results.findIndex((result) => searchHitKey(result) === targetKey);
   return index === -1 ? 0 : index;
+}
+
+function formatSearchLocation(hit: SearchHit): string {
+  if (hit.startLine === undefined) return "";
+  if (hit.endLine === undefined || hit.endLine === hit.startLine) {
+    return `:${hit.startLine}`;
+  }
+  return `:${hit.startLine}-${hit.endLine}`;
+}
+
+function searchHitKey(hit: SearchHit): string {
+  return `${hit.fullPath}:${hit.startLine ?? ""}:${hit.endLine ?? ""}:${hit.isDirectory ? "dir" : "file"}`;
 }
 
 function isPrintableInput(data: string): boolean {
