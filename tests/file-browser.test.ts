@@ -1161,8 +1161,33 @@ describe("FileViewerOverlay", () => {
     expect((overlay as any).leftPanelWidth(78, 1, "tree")).toBe(25);
     expect((overlay as any).leftPanelWidth(58, 1, "tree")).toBe(25);
     expect((overlay as any).leftPanelWidth(98, 1, "tree")).toBe(25);
+    expect((overlay as any).leftPanelWidth(158, 1, "tree")).toBe(39);
     expect((overlay as any).leftPanelWidth(78, 1, "search")).toBe(38);
     expect((overlay as any).leftPanelWidth(58, 1, "search")).toBe(28);
+  });
+
+  it("caps the tree pane width at 50 columns", () => {
+    const files = new FakeFileRepository({
+      "/root": [entry("/root/very-long-file-name.ts", false), entry("/root/b.ts", false)],
+    });
+
+    const overlay = new FileViewerOverlay(
+      "/root",
+      { requestRender() {}, terminal: { rows: 10 } } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as never,
+      files,
+      [],
+      undefined,
+      () => {},
+      () => {},
+    );
+
+    expect((overlay as any).leftPanelWidth(1000, 1, "tree")).toBe(50);
+    expect((overlay as any).leftPanelWidth(1000, 1, "search")).toBe(499);
   });
 
   it("falls back to a full-width tree when the split cannot keep the minimum tree width", () => {

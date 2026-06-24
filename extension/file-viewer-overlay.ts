@@ -75,6 +75,7 @@ const FILE_TREE_BG: BgColor = "customMessageBg";
 const PREVIEW_BG: BgColor = "toolPendingBg";
 const MIN_SPLIT_PANEL_WIDTH = 10;
 const MIN_TREE_PANEL_WIDTH = 25;
+const MAX_TREE_PANEL_WIDTH = 50;
 
 function getCachedLines(
   cache: RenderCache | undefined,
@@ -956,7 +957,10 @@ export class FileViewerOverlay {
     const availableWidth = Math.max(1, contentWidth - gutterWidth);
     const ratio = screen === "search" ? 0.5 : 0.25;
     const minWidth = screen === "tree" ? MIN_TREE_PANEL_WIDTH : MIN_SPLIT_PANEL_WIDTH;
-    const maxWidth = Math.max(minWidth, availableWidth - MIN_SPLIT_PANEL_WIDTH);
+    const baseMaxWidth = Math.max(minWidth, availableWidth - MIN_SPLIT_PANEL_WIDTH);
+    const maxWidth = screen === "tree"
+      ? Math.max(minWidth, Math.min(baseMaxWidth, MAX_TREE_PANEL_WIDTH))
+      : baseMaxWidth;
     return Math.max(minWidth, Math.min(maxWidth, Math.floor(availableWidth * ratio)));
   }
 
