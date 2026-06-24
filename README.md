@@ -64,7 +64,7 @@ Pins are a lightweight way to tell pi, "this file or snippet matters for my next
 
 Extensions and skills can set a curated shortlist of file locations through the `set_file_browser_results` tool.
 
-In TUI mode, that shortlist is stored without opening automatically. If the input editor is empty, the extension prefills `/files-result` for you. The shortlist also appears in the widget area and can be reopened with `/files-result`, where you can preview, edit, and pin the suggested files or ranges.
+In TUI mode, that shortlist is stored without opening automatically. If the input editor is empty, the extension prefills `/files-result` for you, and the shortlist also appears in the widget area. If the editor already has input, the shortlist stays in the widget area and can be reopened with `/files-result`, where you can preview, edit, and pin the suggested files or ranges.
 
 This package also ships a `file-browser-shortlist` skill for investigations that end by adding a shortlist to the file browser.
 

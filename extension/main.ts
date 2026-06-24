@@ -128,11 +128,10 @@ export default function (pi: ExtensionAPI) {
         hits,
       };
       const browserResults = getBrowserResults(ctx.cwd);
-      updateBrowserResultsWidget(ctx, browserResults);
-
       const editorPrefill = !!browserResults
         ? prefillFilesResultCommand(ctx)
         : "none";
+      updateBrowserResultsWidget(ctx, browserResults);
 
       return {
         content: [{
@@ -390,7 +389,7 @@ function updateChatContextWidget(
     render: (width: number) => [
       fit(
         width,
-        `${theme.fg("muted", "Pinned context:")} ${theme.fg("accent", pinned.nextTurn.map((pin) => pin.displayLabel).join(", "))}`,
+        ` ${theme.fg("muted", "Pinned context:")} ${theme.fg("accent", pinned.nextTurn.map((pin) => pin.displayLabel).join(", "))}`,
       ),
     ],
     invalidate(): void {},
@@ -411,8 +410,9 @@ function updateBrowserResultsWidget(
     render: (width: number) => [
       fit(
         width,
-        `${theme.fg("muted", "Browser results:")} ${theme.fg("accent", `${browserResults.title} (${browserResults.hits.length})`)} ${theme.fg("dim", "/files-result")}`,
+        ` ${theme.fg("muted", "Browser results:")} ${theme.fg("accent", `${browserResults.title} (${browserResults.hits.length})`)} ${theme.fg("dim", "/files-result")}`,
       ),
+      "",
     ],
     invalidate(): void {},
   }));
