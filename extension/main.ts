@@ -410,9 +410,8 @@ function updateBrowserResultsWidget(
     render: (width: number) => [
       fit(
         width,
-        ` ${theme.fg("muted", "Browser results:")} ${theme.fg("accent", `${browserResults.title} (${browserResults.hits.length})`)} ${theme.fg("dim", "/files-result")}`,
+        ` ${theme.fg("muted", "Shortlist:")} ${theme.fg("accent", `${browserResults.title} (${browserResults.hits.length})`)} ${theme.fg("dim", "/files-result")}`,
       ),
-      "",
     ],
     invalidate(): void {},
   }));

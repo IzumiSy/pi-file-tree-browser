@@ -66,8 +66,11 @@ describe("set_file_browser_results", () => {
           fg: (_color: string, text: string) => text,
         },
       );
-      expect(widget.render(80).join("\n")).toContain("Sample results (1)");
-      expect(widget.render(80).join("\n")).toContain("/files-result");
+      const rendered = widget.render(80);
+      expect(rendered).toHaveLength(1);
+      expect(rendered[0]).toContain("Shortlist:");
+      expect(rendered[0]).toContain("Sample results (1)");
+      expect(rendered[0]).toContain("/files-result");
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
