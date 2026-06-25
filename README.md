@@ -46,6 +46,7 @@ These controls apply after opening `/files` or `/files-result`.
 - `m`: Rename or move the selected file or directory
 - `d`: Delete the selected file or empty directory with confirmation
 - `o`: In search-result preview, reopen the file in the tree view
+- `y`: Copy the previewed file to the clipboard
 - `/`: Search files, or search inside the previewed file
 - `s`: Pin the current file or selected preview range
 - `Ctrl+S`: Pin the whole file

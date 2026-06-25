@@ -102,6 +102,7 @@ const HELP_LINES = [
   "Ctrl+U/D   Move preview cursor by half a page",
   "n / N      Next / previous preview search match",
   "o          Open previewed file in the tree view",
+  "y          Copy previewed file to clipboard",
   "q          Close current screen or browser",
   "r          Reload directory",
   "Ctrl+C     Cancel current mode/selection",
@@ -131,6 +132,9 @@ export class FileViewerOverlay {
   private readonly previewSearch: PreviewSearchModel;
   private readonly commitChatContextPins: (pins: ContextPin[]) => void;
   private readonly done: (result: FileViewerResult) => void;
+  private readonly copyPreviewedFileToClipboard:
+    | ((fullPath: string) => void | Promise<void>)
+    | undefined;
   private screens: ViewerScreen[] = ["tree"];
   private treePageStep = TREE_PAGE_STEP;
   private helpScroll = 0;
@@ -141,6 +145,27 @@ export class FileViewerOverlay {
   private searchPanelCache: RenderCache | undefined;
   private finished = false;
 
+  constructor(
+    cwd: string,
+    tui: TUI,
+    theme: Theme,
+    files: FileRepositoryLike,
+    chatContextPins: ContextPin[],
+    commitChatContextPins: (pins: ContextPin[]) => void,
+    done: (result: FileViewerResult) => void,
+    copyPreviewedFileToClipboard?: (fullPath: string) => void | Promise<void>,
+  );
+  constructor(
+    cwd: string,
+    tui: TUI,
+    theme: Theme,
+    files: FileRepositoryLike,
+    chatContextPins: ContextPin[],
+    unusedSessionPin: ContextPin | undefined,
+    commitChatContextPins: (pins: ContextPin[]) => void,
+    done: (result: FileViewerResult) => void,
+    copyPreviewedFileToClipboard?: (fullPath: string) => void | Promise<void>,
+  );
   constructor(
     private readonly cwd: string,
     private readonly tui: TUI,
@@ -154,14 +179,19 @@ export class FileViewerOverlay {
     doneOrCommitChatContextPins:
       | ((result: FileViewerResult) => void)
       | ((pins: ContextPin[]) => void),
-    maybeDone?: (result: FileViewerResult) => void,
+    maybeDoneOrCopy?: ((result: FileViewerResult) => void) | ((fullPath: string) => void | Promise<void>),
+    maybeCopyPreviewedFileToClipboard?: (fullPath: string) => void | Promise<void>,
   ) {
     if (typeof commitChatContextPinsOrUnusedSessionPin === "function") {
       this.commitChatContextPins = commitChatContextPinsOrUnusedSessionPin;
       this.done = doneOrCommitChatContextPins as (result: FileViewerResult) => void;
+      this.copyPreviewedFileToClipboard = maybeDoneOrCopy as
+        | ((fullPath: string) => void | Promise<void>)
+        | undefined;
     } else {
       this.commitChatContextPins = doneOrCommitChatContextPins as (pins: ContextPin[]) => void;
-      this.done = maybeDone as (result: FileViewerResult) => void;
+      this.done = maybeDoneOrCopy as (result: FileViewerResult) => void;
+      this.copyPreviewedFileToClipboard = maybeCopyPreviewedFileToClipboard;
     }
 
     this.tree = new FileTreeModel(cwd, files);
@@ -362,6 +392,13 @@ export class FileViewerOverlay {
     if (matchesKey(data, "o")) {
       if (this.openPreviewInTreeView()) {
         this.tui.requestRender();
+      }
+      return;
+    }
+
+    if (matchesKey(data, "y")) {
+      if (this.activeScreen() === "preview" && this.preview.previewPath) {
+        void this.copyPreviewedFileToClipboard?.(this.preview.previewPath);
       }
       return;
     }

@@ -700,6 +700,50 @@ describe("FileViewerOverlay", () => {
     expect((overlay as any).tree.currentRow()?.fullPath).toBe("/root/src/file.ts");
   });
 
+  it("uses y to copy the previewed file without closing the overlay", () => {
+    const files = new FakeFileRepository(
+      {
+        "/root": [entry("/root/file.ts", false)],
+      },
+      {
+        "/root/file.ts": {
+          rawText: "alpha\nbeta",
+          fallbackLines: ["alpha", "beta"],
+          highlight: true,
+        },
+      },
+    );
+    const copied: string[] = [];
+    const results: unknown[] = [];
+
+    const overlay = new FileViewerOverlay(
+      "/root",
+      { requestRender() {}, terminal: { rows: 10 } } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as never,
+      files,
+      [],
+      undefined,
+      () => {},
+      (result) => {
+        results.push(result);
+      },
+      (fullPath: string) => {
+        copied.push(fullPath);
+      },
+    );
+
+    overlay.handleInput("\r");
+    overlay.handleInput("y");
+
+    expect(copied).toEqual(["/root/file.ts"]);
+    expect((overlay as any).preview.isOpen()).toBe(true);
+    expect(results).toEqual([]);
+  });
+
   it("uses ctrl+c to dismiss preview search status without closing the overlay", () => {
     const files = new FakeFileRepository(
       {
