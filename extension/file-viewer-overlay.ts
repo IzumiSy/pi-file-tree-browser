@@ -1,7 +1,14 @@
 import path from "node:path";
 
 import { type Theme } from "@earendil-works/pi-coding-agent";
-import { Box, matchesKey, Text, type TUI } from "@earendil-works/pi-tui";
+import {
+  Box,
+  matchesKey,
+  Text,
+  truncateToWidth,
+  visibleWidth,
+  type TUI,
+} from "@earendil-works/pi-tui";
 
 import {
   isWithin,
@@ -27,7 +34,11 @@ import {
   type ContextPin,
   type RangeContextPin,
 } from "./pinned-files";
-import { fit } from "./text-layout";
+
+export function fit(width: number, text: string): string {
+  const clipped = truncateToWidth(text, width, "", true);
+  return clipped + " ".repeat(Math.max(0, width - visibleWidth(clipped)));
+}
 
 type BgColor = "selectedBg" | "customMessageBg" | "toolPendingBg";
 type ViewerScreen = "tree" | "search" | "preview" | "help";

@@ -22,10 +22,13 @@ import {
   type SearchHit,
 } from "./browser-results";
 import {
-  FileViewerOverlay,
   type FileViewerResult,
   type FileViewerState,
 } from "./file-browser";
+import {
+  FileViewerOverlay,
+  fit,
+} from "./file-viewer-overlay";
 import { FileRepository } from "./file-repository";
 import {
   buildPinManagerItems,
@@ -35,7 +38,6 @@ import {
   type ContextPin,
   type PinManagerState,
 } from "./pinned-files";
-import { fit } from "./text-layout";
 
 const files = new FileRepository();
 let pendingChatContextPins: ContextPin[] = [];
