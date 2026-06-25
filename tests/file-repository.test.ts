@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -116,6 +116,27 @@ describe("FileRepository", () => {
         false,
         false,
       ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("creates, moves, and deletes files and empty directories", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "pi-files-"));
+
+    try {
+      mkdirSync(path.join(root, "src"));
+
+      const repo = new FileRepository();
+      repo.createEntry(path.join(root, "draft.ts"), "file");
+      repo.createEntry(path.join(root, "empty"), "directory");
+      repo.moveEntry(path.join(root, "draft.ts"), path.join(root, "src", "draft.ts"));
+      repo.deleteEntry(path.join(root, "src", "draft.ts"), false);
+      repo.deleteEntry(path.join(root, "empty"), true);
+
+      expect(existsSync(path.join(root, "draft.ts"))).toBe(false);
+      expect(existsSync(path.join(root, "src", "draft.ts"))).toBe(false);
+      expect(existsSync(path.join(root, "empty"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

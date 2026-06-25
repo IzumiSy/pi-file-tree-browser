@@ -37,6 +37,28 @@ type RenderCache = {
   lines: string[];
 };
 
+type TreeActionState =
+  | {
+    kind: "create";
+    baseDir: string;
+    input: string;
+    error?: string;
+  }
+  | {
+    kind: "rename";
+    sourcePath: string;
+    isDirectory: boolean;
+    baseDir: string;
+    input: string;
+    error?: string;
+  }
+  | {
+    kind: "delete";
+    targetPath: string;
+    isDirectory: boolean;
+    error?: string;
+  };
+
 const TREE_PAGE_STEP = 4;
 
 const HELP_LINES = [
@@ -59,6 +81,11 @@ const HELP_LINES = [
   "Type       Filter while search is open",
   "Backspace  Delete search input",
   "Esc        Leave search/help, close preview, or clear selection",
+  "",
+  "Files",
+  "a          Create file (name) or directory (name/)",
+  "m          Rename or move the selected file/directory",
+  "d          Delete the selected file or empty directory",
   "",
   "Preview",
   "Ctrl+U/D   Move preview cursor by half a page",
@@ -97,6 +124,7 @@ export class FileViewerOverlay {
   private treePageStep = TREE_PAGE_STEP;
   private helpScroll = 0;
   private helpPageStep = 1;
+  private treeAction: TreeActionState | undefined;
   private headerCache: RenderCache | undefined;
   private treePanelCache: RenderCache | undefined;
   private searchPanelCache: RenderCache | undefined;
@@ -150,6 +178,8 @@ export class FileViewerOverlay {
 
   handleInput(data: string): void {
     if (this.finished) return;
+
+    if (this.handleTreeActionInput(data)) return;
 
     if (matchesKey(data, "q")) {
       if (this.closeCurrentScreen()) {
@@ -348,6 +378,24 @@ export class FileViewerOverlay {
       return;
     }
 
+    if (this.activeScreen() === "tree" && matchesKey(data, "a")) {
+      this.openCreatePrompt();
+      this.tui.requestRender();
+      return;
+    }
+
+    if (this.activeScreen() === "tree" && matchesKey(data, "m")) {
+      this.openRenamePrompt();
+      this.tui.requestRender();
+      return;
+    }
+
+    if (this.activeScreen() === "tree" && matchesKey(data, "d")) {
+      this.openDeletePrompt();
+      this.tui.requestRender();
+      return;
+    }
+
     if (matchesKey(data, "r")) {
       this.tree.reload();
       this.tui.requestRender();
@@ -477,6 +525,10 @@ export class FileViewerOverlay {
   }
 
   private dismissTransientMode(): boolean {
+    if (this.treeAction) {
+      this.treeAction = undefined;
+      return true;
+    }
     if (this.previewSearch.isInput()) {
       this.closePreviewSearch();
       return true;
@@ -488,6 +540,241 @@ export class FileViewerOverlay {
       return this.preview.clearSelection();
     }
     return false;
+  }
+
+  private handleTreeActionInput(data: string): boolean {
+    if (!this.treeAction) return false;
+
+    if (matchesKey(data, "ctrl+c") || matchesKey(data, "escape")) {
+      this.treeAction = undefined;
+      this.tui.requestRender();
+      return true;
+    }
+
+    if (this.treeAction.kind === "delete") {
+      if (matchesKey(data, "y") || data === "Y") {
+        this.confirmDeletePrompt();
+      } else {
+        this.treeAction = undefined;
+      }
+      this.tui.requestRender();
+      return true;
+    }
+
+    if (matchesKey(data, "enter")) {
+      if (this.treeAction.kind === "create") {
+        this.submitCreatePrompt();
+      } else {
+        this.submitRenamePrompt();
+      }
+      this.tui.requestRender();
+      return true;
+    }
+
+    if (matchesKey(data, "backspace")) {
+      if (this.treeAction.input.length > 0) {
+        const { error: _error, ...nextAction } = this.treeAction;
+        this.treeAction = {
+          ...nextAction,
+          input: this.treeAction.input.slice(0, -1),
+        };
+      }
+      this.tui.requestRender();
+      return true;
+    }
+
+    if (isPrintableInput(data)) {
+      const { error: _error, ...nextAction } = this.treeAction;
+      this.treeAction = {
+        ...nextAction,
+        input: `${this.treeAction.input}${data}`,
+      };
+      this.tui.requestRender();
+      return true;
+    }
+
+    return true;
+  }
+
+  private openCreatePrompt(): void {
+    const row = this.tree.currentRow();
+    if (row?.fullPath.endsWith("#more")) return;
+
+    this.treeAction = {
+      kind: "create",
+      baseDir: row?.isDirectory ? row.fullPath : this.tree.treeRoot,
+      input: "",
+    };
+  }
+
+  private openRenamePrompt(): void {
+    const row = this.tree.currentRow();
+    if (!row || row.fullPath.endsWith("#more")) return;
+
+    this.treeAction = {
+      kind: "rename",
+      sourcePath: row.fullPath,
+      isDirectory: row.isDirectory,
+      baseDir: path.dirname(row.fullPath),
+      input: row.label.replace(/\/$/, ""),
+    };
+  }
+
+  private openDeletePrompt(): void {
+    const row = this.tree.currentRow();
+    if (!row || row.fullPath.endsWith("#more")) return;
+
+    this.treeAction = {
+      kind: "delete",
+      targetPath: row.fullPath,
+      isDirectory: row.isDirectory,
+    };
+  }
+
+  private submitCreatePrompt(): void {
+    const action = this.treeAction;
+    if (!action || action.kind !== "create") return;
+
+    const parsed = this.parseTreeActionTarget(action.baseDir, action.input, "create");
+    if ("error" in parsed) {
+      this.treeAction = { ...action, error: parsed.error };
+      return;
+    }
+
+    try {
+      this.files.createEntry(parsed.fullPath, parsed.kind);
+      this.tree.reload(parsed.fullPath);
+      this.treeAction = undefined;
+    } catch (error) {
+      this.treeAction = { ...action, error: this.describeError(error) };
+    }
+  }
+
+  private submitRenamePrompt(): void {
+    const action = this.treeAction;
+    if (!action || action.kind !== "rename") return;
+
+    const parsed = this.parseTreeActionTarget(action.baseDir, action.input, "rename");
+    if ("error" in parsed) {
+      this.treeAction = { ...action, error: parsed.error };
+      return;
+    }
+
+    try {
+      this.files.moveEntry(action.sourcePath, parsed.fullPath);
+      this.retargetPins(action.sourcePath, parsed.fullPath, action.isDirectory);
+      this.tree.reload(parsed.fullPath);
+      this.treeAction = undefined;
+    } catch (error) {
+      this.treeAction = { ...action, error: this.describeError(error) };
+    }
+  }
+
+  private confirmDeletePrompt(): void {
+    const action = this.treeAction;
+    if (!action || action.kind !== "delete") return;
+
+    const nextSelection = this.tree.rows[this.tree.selected + 1]?.fullPath
+      ?? this.tree.rows[this.tree.selected - 1]?.fullPath
+      ?? this.tree.treeRoot;
+
+    try {
+      this.files.deleteEntry(action.targetPath, action.isDirectory);
+      this.removePinsForPath(action.targetPath, action.isDirectory);
+      this.tree.reload(nextSelection);
+      this.treeAction = undefined;
+    } catch (error) {
+      this.treeAction = { ...action, error: this.describeError(error) };
+    }
+  }
+
+  private parseTreeActionTarget(
+    baseDir: string,
+    input: string,
+    mode: "create" | "rename",
+  ):
+    | { fullPath: string; kind: "file" | "directory" }
+    | { error: string } {
+    const trimmed = input.trim();
+    const wantsDirectory = mode === "create" && trimmed.endsWith("/");
+    const relativePath = wantsDirectory ? trimmed.slice(0, -1) : trimmed;
+    if (relativePath.length === 0) {
+      return { error: mode === "create" ? "name required" : "path required" };
+    }
+
+    const fullPath = path.resolve(baseDir, relativePath);
+    if (!isWithin(fullPath, this.cwd)) {
+      return { error: "path must stay inside the workspace" };
+    }
+
+    return { fullPath, kind: wantsDirectory ? "directory" : "file" };
+  }
+
+  private describeTreeAction(): { leftText: string; rightText: string } | undefined {
+    const action = this.treeAction;
+    if (!action) return undefined;
+
+    switch (action.kind) {
+      case "create": {
+        const prefix = this.displayDirPrefix(action.baseDir);
+        const suffix = action.error ? ` ${this.theme.fg("warning", `— ${action.error}`)}` : "";
+        return {
+          leftText: ` ${this.theme.fg("accent", this.theme.bold("a"))} ${this.theme.fg("muted", prefix)}${this.theme.fg("accent", action.input)}${suffix}`,
+          rightText: "Enter save • Esc cancel",
+        };
+      }
+      case "rename": {
+        const prefix = this.displayDirPrefix(action.baseDir);
+        const suffix = action.error ? ` ${this.theme.fg("warning", `— ${action.error}`)}` : "";
+        return {
+          leftText: ` ${this.theme.fg("accent", this.theme.bold("m"))} ${this.theme.fg("muted", prefix)}${this.theme.fg("accent", action.input)}${suffix}`,
+          rightText: "Enter save • Esc cancel",
+        };
+      }
+      case "delete": {
+        const targetPath = this.displayPath(action.targetPath);
+        const suffix = action.error ? ` ${this.theme.fg("warning", `— ${action.error}`)}` : "";
+        return {
+          leftText: ` ${this.theme.fg("warning", this.theme.bold("d delete"))} ${this.theme.bold(targetPath)}${this.theme.fg("warning", this.theme.bold("? [y/N]"))}${suffix}`,
+          rightText: action.error ? "y retry • Esc cancel" : "y delete • Esc cancel",
+        };
+      }
+    }
+  }
+
+  private displayPath(fullPath: string): string {
+    if (fullPath === this.cwd) return ".";
+    return this.files.displayPath(fullPath, this.cwd);
+  }
+
+  private displayDirPrefix(fullPath: string): string {
+    if (fullPath === this.cwd) return "./";
+    const displayPath = this.files.displayPath(fullPath, this.cwd);
+    return displayPath.endsWith("/") ? displayPath : `${displayPath}/`;
+  }
+
+  private retargetPins(fromPath: string, toPath: string, isDirectory: boolean): void {
+    this.chatContextPins = this.chatContextPins.map((pin) => {
+      if (!this.pinMatchesPath(pin, fromPath, isDirectory)) return pin;
+      const nextFullPath = isDirectory
+        ? path.join(toPath, path.relative(fromPath, pin.fullPath))
+        : toPath;
+      return { ...pin, fullPath: nextFullPath };
+    });
+  }
+
+  private removePinsForPath(targetPath: string, isDirectory: boolean): void {
+    this.chatContextPins = this.chatContextPins.filter((pin) =>
+      !this.pinMatchesPath(pin, targetPath, isDirectory)
+    );
+  }
+
+  private pinMatchesPath(pin: ContextPin, targetPath: string, isDirectory: boolean): boolean {
+    return isDirectory ? isWithin(pin.fullPath, targetPath) : pin.fullPath === targetPath;
+  }
+
+  private describeError(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
   }
 
   private handleHelpInput(data: string): boolean {
@@ -831,19 +1118,27 @@ export class FileViewerOverlay {
 
   private renderHeader(width: number, paddingX: number, contentWidth: number): string[] {
     const activeScreen = this.activeScreen();
-    const leftText = activeScreen === "help"
-      ? " help"
-      : this.leftPanelScreen() === "search"
-        ? this.search.headerText()
-        : ` ${this.tree.treeRoot}`;
+    const treeAction = this.describeTreeAction();
+    const leftText = treeAction
+      ? treeAction.leftText
+      : activeScreen === "help"
+        ? " help"
+        : this.leftPanelScreen() === "search"
+          ? this.search.headerText()
+          : ` ${this.tree.treeRoot}`;
     const qLabel = this.screens.length > 1 ? "q back" : "q close";
-    const rightText = activeScreen === "help"
-      ? `${qLabel} • ? close`
-      : activeScreen === "preview"
-        ? `${qLabel} • h back`
-        : `${qLabel} • ? help`;
+    const rightText = treeAction
+      ? treeAction.rightText
+      : activeScreen === "help"
+        ? `${qLabel} • ? close`
+        : activeScreen === "preview"
+          ? `${qLabel} • h back`
+          : `${qLabel} • ? help`;
     const leftWidth = Math.max(1, contentWidth - rightText.length - 1);
-    const line = `${this.theme.fg("muted", fit(leftWidth, leftText))} ${this.theme.fg("accent", rightText)}`;
+    const left = treeAction
+      ? fit(leftWidth, leftText)
+      : this.theme.fg("muted", fit(leftWidth, leftText));
+    const line = `${left} ${this.theme.fg("accent", rightText)}`;
     const key = `${width}:${paddingX}:${contentWidth}:${activeScreen}:${leftText}:${rightText}`;
     this.headerCache = getCachedLines(this.headerCache, key, () =>
       this.boxFromLines(
@@ -1065,7 +1360,7 @@ export class FileViewerOverlay {
       return fit(width, this.theme.fg("accent", this.theme.bold(line)));
     }
 
-    if (["Navigation", "Search", "Pins", "Preview"].includes(line)) {
+    if (["Navigation", "Search", "Pins", "Files", "Preview"].includes(line)) {
       return fit(width, this.theme.fg("muted", line));
     }
 

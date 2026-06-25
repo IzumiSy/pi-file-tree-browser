@@ -1,6 +1,15 @@
 import { strict as assert } from "node:assert";
 import { spawnSync } from "node:child_process";
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmdirSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 
 import { getLanguageFromPath, highlightCode } from "@earendil-works/pi-coding-agent";
@@ -186,6 +195,32 @@ export class FileRepository {
 
   writeText(fullPath: string, text: string): void {
     writeFileSync(fullPath, text, "utf8");
+  }
+
+  createEntry(fullPath: string, kind: "file" | "directory"): void {
+    if (kind === "directory") {
+      mkdirSync(fullPath);
+      return;
+    }
+
+    writeFileSync(fullPath, "", { encoding: "utf8", flag: "wx" });
+  }
+
+  moveEntry(fullPath: string, nextFullPath: string): void {
+    if (fullPath === nextFullPath) return;
+    if (existsSync(nextFullPath)) {
+      throw new Error(`target already exists: ${nextFullPath}`);
+    }
+    renameSync(fullPath, nextFullPath);
+  }
+
+  deleteEntry(fullPath: string, isDirectory: boolean): void {
+    if (isDirectory) {
+      rmdirSync(fullPath);
+      return;
+    }
+
+    unlinkSync(fullPath);
   }
 
   displayPath(fullPath: string, cwd: string): string {

@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   FileSearchModel,
@@ -15,10 +18,11 @@ import {
   togglePinnedPin,
   type ContextPin,
 } from "../extension/pinned-files";
-import type {
-  PreviewData,
-  TrackedFile,
-  TreeEntry,
+import {
+  FileRepository,
+  type PreviewData,
+  type TrackedFile,
+  type TreeEntry,
 } from "../extension/file-repository";
 
 class FakeFileRepository {
@@ -63,6 +67,12 @@ class FakeFileRepository {
 
   writeText(): void {}
 
+  createEntry(): void {}
+
+  moveEntry(): void {}
+
+  deleteEntry(): void {}
+
   displayPath(fullPath: string): string {
     return fullPath;
   }
@@ -96,6 +106,12 @@ function rangePin(
   snapshot: string,
 ): ContextPin {
   return { kind: "range", fullPath, startLine, endLine, snapshot };
+}
+
+function typeIntoOverlay(overlay: FileViewerOverlay, text: string): void {
+  for (const char of text) {
+    overlay.handleInput(char);
+  }
 }
 
 const pathDisplayer = {
@@ -1059,6 +1075,121 @@ describe("FileViewerOverlay", () => {
 
     overlay.handleInput(String.fromCharCode(21));
     expect((overlay as any).tree.currentRow()?.fullPath).toBe("/root/a.ts");
+  });
+
+  it("creates files and directories from the tree", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "pi-files-overlay-"));
+
+    try {
+      const overlay = new FileViewerOverlay(
+        root,
+        { requestRender() {}, terminal: { rows: 10 } } as never,
+        {
+          fg: (_color: string, text: string) => text,
+          bg: (_color: string, text: string) => text,
+          bold: (text: string) => text,
+        } as never,
+        new FileRepository((code) => code.split("\n")),
+        [],
+        undefined,
+        () => {},
+        () => {},
+      );
+
+      overlay.handleInput("a");
+      expect(overlay.render(80)[0]).toContain("a ./");
+      typeIntoOverlay(overlay, "notes.ts");
+      overlay.handleInput("\r");
+
+      overlay.handleInput("a");
+      typeIntoOverlay(overlay, "empty/");
+      overlay.handleInput("\r");
+
+      expect(overlay.render(80).join("\n")).toContain("notes.ts");
+      expect(overlay.render(80).join("\n")).toContain("empty/");
+      expect(existsSync(path.join(root, "notes.ts"))).toBe(true);
+      expect(existsSync(path.join(root, "empty"))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("renames or moves the selected file and keeps pins pointed at it", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "pi-files-overlay-"));
+    const committed: ContextPin[][] = [];
+
+    try {
+      mkdirSync(path.join(root, "src"));
+      writeFileSync(path.join(root, "todo.ts"), "export const todo = true;\n");
+
+      const overlay = new FileViewerOverlay(
+        root,
+        { requestRender() {}, terminal: { rows: 10 } } as never,
+        {
+          fg: (_color: string, text: string) => text,
+          bg: (_color: string, text: string) => text,
+          bold: (text: string) => text,
+        } as never,
+        new FileRepository((code) => code.split("\n")),
+        [filePin(path.join(root, "todo.ts"))],
+        undefined,
+        (pins: ContextPin[]) => {
+          committed.push(pins);
+        },
+        () => {},
+      );
+
+      overlay.handleInput("j");
+      overlay.handleInput("m");
+      expect(overlay.render(80)[0]).toContain("m ./todo.ts");
+      (overlay as any).treeAction = {
+        ...(overlay as any).treeAction,
+        input: "",
+      };
+      typeIntoOverlay(overlay, "src/done.ts");
+      overlay.handleInput("\r");
+      overlay.handleInput("q");
+
+      expect(existsSync(path.join(root, "todo.ts"))).toBe(false);
+      expect(existsSync(path.join(root, "src", "done.ts"))).toBe(true);
+      expect(committed).toEqual([[filePin(path.join(root, "src", "done.ts"))]]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("deletes only after confirmation", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "pi-files-overlay-"));
+
+    try {
+      writeFileSync(path.join(root, "drop.ts"), "export const drop = true;\n");
+
+      const overlay = new FileViewerOverlay(
+        root,
+        { requestRender() {}, terminal: { rows: 10 } } as never,
+        {
+          fg: (_color: string, text: string) => text,
+          bg: (_color: string, text: string) => text,
+          bold: (text: string) => text,
+        } as never,
+        new FileRepository((code) => code.split("\n")),
+        [],
+        undefined,
+        () => {},
+        () => {},
+      );
+
+      overlay.handleInput("d");
+      overlay.handleInput("n");
+      expect(existsSync(path.join(root, "drop.ts"))).toBe(true);
+
+      overlay.handleInput("d");
+      overlay.handleInput("y");
+      expect(existsSync(path.join(root, "drop.ts"))).toBe(false);
+      expect(overlay.render(80).join("\n")).not.toContain("drop.ts");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("toggles multiple next-turn pins with ctrl+s and s", () => {

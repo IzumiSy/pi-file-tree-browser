@@ -42,6 +42,9 @@ These controls apply after opening `/files` or `/files-result`.
 - `h` / `←`: Go to parent directory, leave search, or close preview
 - `q`: Close the current screen, or close the browser from the root screen
 - `Enter`: Open file in the editor
+- `a`: Create a file, or a directory by ending the name with `/`
+- `m`: Rename or move the selected file or directory
+- `d`: Delete the selected file or empty directory with confirmation
 - `o`: In search-result preview, reopen the file in the tree view
 - `/`: Search files, or search inside the previewed file
 - `s`: Pin the current file or selected preview range

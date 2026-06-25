@@ -23,6 +23,9 @@ export type FileRepositoryLike = Pick<
   | "readEditableText"
   | "listTrackedFiles"
   | "writeText"
+  | "createEntry"
+  | "moveEntry"
+  | "deleteEntry"
   | "displayPath"
 >;
 
