@@ -700,7 +700,7 @@ describe("FileViewerOverlay", () => {
     expect((overlay as any).tree.currentRow()?.fullPath).toBe("/root/src/file.ts");
   });
 
-  it("uses y to copy the previewed file without closing the overlay", () => {
+  it("uses y to copy the previewed file without closing the overlay", async () => {
     const files = new FakeFileRepository(
       {
         "/root": [entry("/root/file.ts", false)],
@@ -738,8 +738,10 @@ describe("FileViewerOverlay", () => {
 
     overlay.handleInput("\r");
     overlay.handleInput("y");
+    await Promise.resolve();
 
     expect(copied).toEqual(["/root/file.ts"]);
+    expect(overlay.render(80).join("\n")).toContain("Copied: /root/file.ts");
     expect((overlay as any).preview.isOpen()).toBe(true);
     expect(results).toEqual([]);
   });
@@ -1141,7 +1143,7 @@ describe("FileViewerOverlay", () => {
       );
 
       overlay.handleInput("a");
-      expect(overlay.render(80)[0]).toContain("a ./");
+      expect(overlay.render(80).join("\n")).toContain("a create ./");
       typeIntoOverlay(overlay, "notes.ts");
       overlay.handleInput("\r");
 
@@ -1185,7 +1187,7 @@ describe("FileViewerOverlay", () => {
 
       overlay.handleInput("j");
       overlay.handleInput("m");
-      expect(overlay.render(80)[0]).toContain("m ./todo.ts");
+      expect(overlay.render(80).join("\n")).toContain("m move/rename todo.ts → ./todo.ts");
       (overlay as any).treeAction = {
         ...(overlay as any).treeAction,
         input: "",

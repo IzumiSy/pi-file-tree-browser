@@ -143,6 +143,8 @@ export class FileViewerOverlay {
   private headerCache: RenderCache | undefined;
   private treePanelCache: RenderCache | undefined;
   private searchPanelCache: RenderCache | undefined;
+  private overlayStatusMessage: string | undefined;
+  private overlayStatusTimer: ReturnType<typeof setTimeout> | undefined;
   private finished = false;
 
   constructor(
@@ -398,7 +400,7 @@ export class FileViewerOverlay {
 
     if (matchesKey(data, "y")) {
       if (this.activeScreen() === "preview" && this.preview.previewPath) {
-        void this.copyPreviewedFileToClipboard?.(this.preview.previewPath);
+        void this.copyPreviewedFile();
       }
       return;
     }
@@ -452,7 +454,8 @@ export class FileViewerOverlay {
 
   render(width: number): string[] {
     const terminalHeight = Math.max(1, this.tui.terminal.rows);
-    const bodyRows = Math.max(1, terminalHeight - 1);
+    const footerHeight = this.shouldRenderOverlayFooter() ? 1 : 0;
+    const bodyRows = Math.max(1, terminalHeight - 1 - footerHeight);
     const activeScreen = this.activeScreen();
     const leftPanelScreen = this.leftPanelScreen();
 
@@ -468,7 +471,7 @@ export class FileViewerOverlay {
 
     if (activeScreen === "help") {
       lines.push(...this.renderHelpPanel(contentWidth, bodyRows, paddingX));
-      return lines;
+      return this.finalizeRenderedLines(lines, width, paddingX, contentWidth);
     }
 
     if (activeScreen === "search") {
@@ -477,7 +480,7 @@ export class FileViewerOverlay {
       } else {
         lines.push(...this.renderSearchPanel(width, bodyRows, 0, width));
       }
-      return lines;
+      return this.finalizeRenderedLines(lines, width, paddingX, contentWidth);
     }
 
     if (activeScreen === "tree") {
@@ -491,7 +494,7 @@ export class FileViewerOverlay {
         const rightLines = Array.from({ length: leftLines.length }, () => " ".repeat(rightWidth));
         lines.push(...this.joinColumns(leftLines, rightLines, gutterWidth));
       }
-      return lines;
+      return this.finalizeRenderedLines(lines, width, paddingX, contentWidth);
     }
 
     if (width < 24) {
@@ -506,7 +509,7 @@ export class FileViewerOverlay {
       lines.push(...this.joinColumns(leftLines, rightLines, gutterWidth));
     }
 
-    return lines;
+    return this.finalizeRenderedLines(lines, width, paddingX, contentWidth);
   }
 
   invalidate(): void {
@@ -516,13 +519,16 @@ export class FileViewerOverlay {
     this.preview.invalidate();
   }
 
-  dispose(): void {}
+  dispose(): void {
+    this.clearOverlayStatus();
+  }
 
   private finish(
     result?: { kind: "close" } | { kind: "edit"; fullPath: string },
   ): void {
     if (this.finished) return;
     this.finished = true;
+    this.clearOverlayStatus();
 
     this.commitChatContextPins(this.chatContextPins);
     const state = this.snapshotState();
@@ -767,16 +773,17 @@ export class FileViewerOverlay {
         const prefix = this.displayDirPrefix(action.baseDir);
         const suffix = action.error ? ` ${this.theme.fg("warning", `— ${action.error}`)}` : "";
         return {
-          leftText: ` ${this.theme.fg("accent", this.theme.bold("a"))} ${this.theme.fg("muted", prefix)}${this.theme.fg("accent", action.input)}${suffix}`,
-          rightText: "Enter save • Esc cancel",
+          leftText: ` ${this.theme.fg("accent", this.theme.bold("a create"))} ${this.theme.fg("muted", prefix)}${this.theme.fg("accent", action.input)}${suffix}`,
+          rightText: action.error ? "Enter retry • Esc cancel" : "Enter create • Esc cancel",
         };
       }
       case "rename": {
+        const sourcePath = this.displayPath(action.sourcePath);
         const prefix = this.displayDirPrefix(action.baseDir);
         const suffix = action.error ? ` ${this.theme.fg("warning", `— ${action.error}`)}` : "";
         return {
-          leftText: ` ${this.theme.fg("accent", this.theme.bold("m"))} ${this.theme.fg("muted", prefix)}${this.theme.fg("accent", action.input)}${suffix}`,
-          rightText: "Enter save • Esc cancel",
+          leftText: ` ${this.theme.fg("accent", this.theme.bold("m move/rename"))} ${this.theme.bold(sourcePath)} ${this.theme.fg("muted", "→ ")}${this.theme.fg("muted", prefix)}${this.theme.fg("accent", action.input)}${suffix}`,
+          rightText: action.error ? "Enter retry • Esc cancel" : "Enter apply • Esc cancel",
         };
       }
       case "delete": {
@@ -1046,6 +1053,40 @@ export class FileViewerOverlay {
     return true;
   }
 
+  private async copyPreviewedFile(): Promise<void> {
+    const fullPath = this.preview.previewPath;
+    if (!fullPath) return;
+
+    try {
+      await this.copyPreviewedFileToClipboard?.(fullPath);
+      this.showOverlayStatus(`Copied: ${this.files.displayPath(fullPath, this.cwd)}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.showOverlayStatus(message);
+    }
+  }
+
+  private showOverlayStatus(message: string): void {
+    this.overlayStatusMessage = message;
+    if (this.overlayStatusTimer) {
+      clearTimeout(this.overlayStatusTimer);
+    }
+    this.overlayStatusTimer = setTimeout(() => {
+      this.overlayStatusMessage = undefined;
+      this.overlayStatusTimer = undefined;
+      this.tui.requestRender();
+    }, 3000);
+    this.tui.requestRender();
+  }
+
+  private clearOverlayStatus(): void {
+    if (this.overlayStatusTimer) {
+      clearTimeout(this.overlayStatusTimer);
+      this.overlayStatusTimer = undefined;
+    }
+    this.overlayStatusMessage = undefined;
+  }
+
   private editPreviewedFile(): void {
     if (!this.preview.previewPath) return;
     this.finish({ kind: "edit", fullPath: this.preview.previewPath });
@@ -1166,26 +1207,19 @@ export class FileViewerOverlay {
 
   private renderHeader(width: number, paddingX: number, contentWidth: number): string[] {
     const activeScreen = this.activeScreen();
-    const treeAction = this.describeTreeAction();
-    const leftText = treeAction
-      ? treeAction.leftText
-      : activeScreen === "help"
-        ? " help"
-        : this.leftPanelScreen() === "search"
-          ? this.search.headerText()
-          : ` ${this.tree.treeRoot}`;
+    const leftText = activeScreen === "help"
+      ? " help"
+      : this.leftPanelScreen() === "search"
+        ? this.search.headerText()
+        : ` ${this.tree.treeRoot}`;
     const qLabel = this.screens.length > 1 ? "q back" : "q close";
-    const rightText = treeAction
-      ? treeAction.rightText
-      : activeScreen === "help"
-        ? `${qLabel} • ? close`
-        : activeScreen === "preview"
-          ? `${qLabel} • h back`
-          : `${qLabel} • ? help`;
+    const rightText = activeScreen === "help"
+      ? `${qLabel} • ? close`
+      : activeScreen === "preview"
+        ? `${qLabel} • h back`
+        : `${qLabel} • ? help`;
     const leftWidth = Math.max(1, contentWidth - rightText.length - 1);
-    const left = treeAction
-      ? fit(leftWidth, leftText)
-      : this.theme.fg("muted", fit(leftWidth, leftText));
+    const left = this.theme.fg("muted", fit(leftWidth, leftText));
     const line = `${left} ${this.theme.fg("accent", rightText)}`;
     const key = `${width}:${paddingX}:${contentWidth}:${activeScreen}:${leftText}:${rightText}`;
     this.headerCache = getCachedLines(this.headerCache, key, () =>
@@ -1197,6 +1231,47 @@ export class FileViewerOverlay {
       ).render(width),
     );
     return this.headerCache.lines;
+  }
+
+  private shouldRenderOverlayFooter(): boolean {
+    return !!this.treeAction
+      || this.previewSearch.shouldRenderFooter()
+      || !!this.overlayStatusMessage;
+  }
+
+  private finalizeRenderedLines(
+    lines: string[],
+    width: number,
+    paddingX: number,
+    contentWidth: number,
+  ): string[] {
+    if (!this.shouldRenderOverlayFooter()) return lines;
+    return lines.concat(this.renderOverlayFooter(width, paddingX, contentWidth));
+  }
+
+  private renderOverlayFooter(width: number, paddingX: number, contentWidth: number): string[] {
+    const treeAction = this.describeTreeAction();
+    if (treeAction) {
+      const leftWidth = Math.max(1, contentWidth - treeAction.rightText.length - 1);
+      const line = `${fit(leftWidth, treeAction.leftText)} ${this.theme.fg("accent", treeAction.rightText)}`;
+      return this.boxFromLines([line], paddingX, contentWidth, "selectedBg").render(width);
+    }
+
+    if (this.previewSearch.shouldRenderFooter()) {
+      return this.boxFromLines(
+        [this.theme.fg("accent", this.previewSearch.footerText())],
+        paddingX,
+        contentWidth,
+        PREVIEW_BG,
+      ).render(width);
+    }
+
+    return this.boxFromLines(
+      [this.theme.fg("accent", this.overlayStatusMessage ?? "")],
+      paddingX,
+      contentWidth,
+      "selectedBg",
+    ).render(width);
   }
 
   private renderHelpPanel(width: number, height: number, paddingX: number): string[] {
@@ -1309,8 +1384,7 @@ export class FileViewerOverlay {
 
   private renderPreviewPanel(width: number, height: number): string[] {
     const showSearchFooter = this.previewSearch.shouldRenderFooter();
-    const footerHeight = showSearchFooter && height > 1 ? 1 : 0;
-    const bodyHeight = Math.max(1, height - footerHeight);
+    const bodyHeight = Math.max(1, height);
     this.preview.previewPageStep = Math.max(1, Math.floor(bodyHeight / 2));
     if (showSearchFooter) {
       this.preview.centerCursor(bodyHeight);
@@ -1345,18 +1419,7 @@ export class FileViewerOverlay {
       );
     }
 
-    if (footerHeight > 0) {
-      lines.push(this.renderPreviewSearchFooter(width));
-    }
-
     return lines;
-  }
-
-  private renderPreviewSearchFooter(width: number): string {
-    return this.applyPersistentBackground(
-      PREVIEW_BG,
-      fit(width, this.theme.fg("accent", this.previewSearch.footerText())),
-    );
   }
 
   private renderPreviewLine(

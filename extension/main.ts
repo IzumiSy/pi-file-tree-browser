@@ -453,9 +453,7 @@ async function openFileViewerOverlay(
           updateChatContextWidget(ctx, pins);
         },
         done,
-        async (fullPath: string) => {
-          await copyPreviewedFile(ctx, fullPath);
-        },
+        copyPreviewedFile,
       );
       overlay.restoreState(
         lastFileViewerStateByCwd?.cwd === ctx.cwd
@@ -472,7 +470,7 @@ async function openFileViewerOverlay(
       overlayOptions: {
         width: "100%",
         maxHeight: "100%",
-        anchor: "center",
+        anchor: "top-left",
         margin: 0,
       },
     },
@@ -489,23 +487,13 @@ async function openFileViewerOverlay(
   return true;
 }
 
-async function copyPreviewedFile(
-  ctx: ExtensionContext,
-  fullPath: string,
-): Promise<void> {
-  try {
-    const editable = files.readEditableText(fullPath);
-    if (editable.kind === "binary") {
-      ctx.ui.notify("Binary files cannot be copied to the clipboard", "error");
-      return;
-    }
-
-    await copyToClipboard(editable.text);
-    ctx.ui.notify(`Copied: ${files.displayPath(fullPath, ctx.cwd)}`, "info");
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    ctx.ui.notify(`copy error: ${message}`, "error");
+async function copyPreviewedFile(fullPath: string): Promise<void> {
+  const editable = files.readEditableText(fullPath);
+  if (editable.kind === "binary") {
+    throw new Error("Binary files cannot be copied to the clipboard");
   }
+
+  await copyToClipboard(editable.text);
 }
 
 async function openFileEditor(
