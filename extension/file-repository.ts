@@ -12,7 +12,11 @@ import {
 } from "node:fs";
 import path from "node:path";
 
-import { getLanguageFromPath, highlightCode } from "@earendil-works/pi-coding-agent";
+import {
+  getLanguageFromPath,
+  getMarkdownTheme,
+  highlightCode,
+} from "@earendil-works/pi-coding-agent";
 
 const FG_RESET = "\x1b[39m";
 
@@ -172,10 +176,64 @@ export class FileRepository {
     end: number,
     language: string | undefined,
   ): string[] {
+    if (language === "markdown") {
+      return this.renderMarkdownSegment(preview.fallbackLines, start, end);
+    }
+
     return this.renderHighlighted(
       preview.fallbackLines.slice(start, end).join("\n"),
       language,
     ).map(ensureForegroundReset);
+  }
+
+  private renderMarkdownSegment(
+    lines: readonly string[],
+    start: number,
+    end: number,
+  ): string[] {
+    const theme = getMarkdownTheme();
+    const rendered: string[] = [];
+    let fence = findMarkdownFence(lines, start);
+    let index = start;
+
+    while (index < end) {
+      const line = lines[index] ?? "";
+
+      if (fence) {
+        if (isMarkdownFenceClose(line, fence)) {
+          rendered.push(theme.codeBlockBorder(line));
+          fence = undefined;
+          index += 1;
+          continue;
+        }
+
+        let blockEnd = index;
+        while (blockEnd < end && !isMarkdownFenceClose(lines[blockEnd] ?? "", fence)) {
+          blockEnd += 1;
+        }
+
+        const blockLines = lines.slice(index, blockEnd);
+        const highlighted = theme.highlightCode
+          ? theme.highlightCode(blockLines.join("\n"), fence.language)
+          : blockLines.map((value) => theme.codeBlock(value));
+        rendered.push(...highlighted);
+        index = blockEnd;
+        continue;
+      }
+
+      const nextFence = parseMarkdownFence(line);
+      if (nextFence) {
+        rendered.push(theme.codeBlockBorder(line));
+        fence = nextFence;
+        index += 1;
+        continue;
+      }
+
+      rendered.push(styleMarkdownLine(line, theme));
+      index += 1;
+    }
+
+    return rendered.map(ensureForegroundReset);
   }
 
   readEditableText(fullPath: string): { kind: "binary" } | { kind: "text"; text: string } {
@@ -276,8 +334,115 @@ export class FileRepository {
   }
 }
 
+type MarkdownTheme = ReturnType<typeof getMarkdownTheme>;
+
+type MarkdownFence = {
+  char: "`" | "~";
+  length: number;
+  language: string | undefined;
+};
+
 function ensureForegroundReset(line: string): string {
   return line.endsWith(FG_RESET) ? line : `${line}${FG_RESET}`;
+}
+
+function parseMarkdownFence(line: string): MarkdownFence | undefined {
+  const match = /^(?: {0,3})(`{3,}|~{3,})([^`]*)$/.exec(line);
+  const marker = match?.[1] ?? "";
+  if (marker.length < 3) return undefined;
+
+  const info = match?.[2]?.trim() ?? "";
+  return {
+    char: marker[0] as MarkdownFence["char"],
+    length: marker.length,
+    language: normalizeMarkdownFenceLanguage(info),
+  };
+}
+
+function findMarkdownFence(lines: readonly string[], end: number): MarkdownFence | undefined {
+  let fence: MarkdownFence | undefined;
+
+  for (let index = 0; index < end; index += 1) {
+    const line = lines[index] ?? "";
+    if (!fence) {
+      fence = parseMarkdownFence(line);
+      continue;
+    }
+    if (isMarkdownFenceClose(line, fence)) {
+      fence = undefined;
+    }
+  }
+
+  return fence;
+}
+
+function isMarkdownFenceClose(line: string, fence: MarkdownFence): boolean {
+  const marker = /^(?: {0,3})(`{3,}|~{3,})\s*$/.exec(line)?.[1] ?? "";
+  return marker[0] === fence.char && marker.length >= fence.length;
+}
+
+function normalizeMarkdownFenceLanguage(languageInfo: string): string | undefined {
+  const token = languageInfo
+    .replace(/^[{.]+/, "")
+    .replace(/[}\s].*$/, "")
+    .toLowerCase();
+  if (token.length === 0) return undefined;
+
+  const alias = MARKDOWN_FENCE_LANGUAGE_ALIASES[token];
+  return alias ?? getLanguageFromPath(`f.${token}`) ?? token;
+}
+
+const MARKDOWN_FENCE_LANGUAGE_ALIASES: Record<string, string> = {
+  js: "javascript",
+  ts: "typescript",
+  sh: "bash",
+  shell: "bash",
+  yml: "yaml",
+};
+
+function styleMarkdownLine(line: string, theme: MarkdownTheme): string {
+  if (/^(?: {0,3})([-*_])(?:\s*\1){2,}\s*$/.test(line)) {
+    return theme.hr(line);
+  }
+
+  if (/^(?: {0,3})#{1,6}(?:\s|$)/.test(line)) {
+    return theme.heading(line);
+  }
+
+  const quoteMatch = /^(\s*> ?)(.*)$/.exec(line);
+  if (quoteMatch) {
+    const prefix = quoteMatch[1] ?? "";
+    const content = quoteMatch[2] ?? "";
+    return `${theme.quoteBorder(prefix)}${theme.quote(styleMarkdownInline(content, theme))}`;
+  }
+
+  const unorderedListMatch = /^(\s*)([-+*])(\s+)(.*)$/.exec(line);
+  if (unorderedListMatch) {
+    const indent = unorderedListMatch[1] ?? "";
+    const bullet = unorderedListMatch[2] ?? "";
+    const spacing = unorderedListMatch[3] ?? "";
+    const content = unorderedListMatch[4] ?? "";
+    return `${indent}${theme.listBullet(bullet)}${spacing}${styleMarkdownInline(content, theme)}`;
+  }
+
+  const orderedListMatch = /^(\s*)(\d+[.)])(\s+)(.*)$/.exec(line);
+  if (orderedListMatch) {
+    const indent = orderedListMatch[1] ?? "";
+    const bullet = orderedListMatch[2] ?? "";
+    const spacing = orderedListMatch[3] ?? "";
+    const content = orderedListMatch[4] ?? "";
+    return `${indent}${theme.listBullet(bullet)}${spacing}${styleMarkdownInline(content, theme)}`;
+  }
+
+  return styleMarkdownInline(line, theme);
+}
+
+function styleMarkdownInline(line: string, theme: MarkdownTheme): string {
+  return line
+    .replace(/`([^`]+)`/g, (value) => theme.code(value))
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_value, text: string, url: string) =>
+      `${theme.link(`[${text}]`)}${theme.linkUrl(`(${url})`)}`
+    );
 }
 
 function sortEntries<T extends { name: string; isDirectory: boolean }>(

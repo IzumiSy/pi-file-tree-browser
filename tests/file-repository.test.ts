@@ -2,8 +2,13 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { FileRepository } from "../extension/file-repository";
+
+const FG_RESET = "\x1b[39m";
+
+initTheme("dark");
 
 describe("FileRepository", () => {
   it("lists directories before files", () => {
@@ -39,6 +44,104 @@ describe("FileRepository", () => {
         kind: "text",
         text: "hello\nworld\n",
       });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("styles markdown headings, lists, blockquotes, links, and inline code", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "pi-files-"));
+
+    try {
+      const file = path.join(root, "README.md");
+      const source = [
+        "# title",
+        "- item",
+        "1. step",
+        "> quote with [link](https://example.com) and `code`",
+        "plain [docs](https://example.com/docs)",
+        "",
+      ].join("\n");
+      writeFileSync(file, source);
+
+      const repo = new FileRepository();
+      const preview = repo.readPreview(file);
+      const lines = repo.renderPreviewLines(file, preview);
+
+      expect(lines).toHaveLength(6);
+      expectStyled(lines[0], "# title");
+      expectStyled(lines[1], "- item");
+      expectStyled(lines[2], "1. step");
+      expectStyled(lines[3], "> quote with [link](https://example.com) and `code`");
+      expectStyled(lines[4], "plain [docs](https://example.com/docs)");
+      expect(lines.every((line) => line.endsWith(FG_RESET))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps fenced code highlighting when preview starts inside a markdown fence", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "pi-files-"));
+
+    try {
+      const file = path.join(root, "README.md");
+      writeFileSync(file, [
+        "intro",
+        "```ts",
+        "const x = 1",
+        "const y = 2",
+        "```",
+        "outro",
+        "",
+      ].join("\n"));
+
+      const repo = new FileRepository();
+      const preview = repo.readPreview(file);
+
+      const insideFenceOnly = repo.renderPreviewLines(file, preview, 2, 1);
+      expect(insideFenceOnly).toHaveLength(1);
+      expectSyntaxHighlighted(insideFenceOnly[0]);
+
+      const insideFenceThroughClose = repo.renderPreviewLines(file, preview, 3, 2);
+      expect(insideFenceThroughClose).toHaveLength(2);
+      expectSyntaxHighlighted(insideFenceThroughClose[0]);
+      expectStyled(insideFenceThroughClose[1], "```");
+      expect(insideFenceThroughClose.every((line) => line.endsWith(FG_RESET))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves common markdown fence language aliases", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "pi-files-"));
+
+    try {
+      const file = path.join(root, "README.md");
+      writeFileSync(file, [
+        "```ts",
+        "const x = 1",
+        "```",
+        "```js",
+        "const y = 2",
+        "```",
+        "```sh",
+        "echo $HOME",
+        "```",
+        "```yml",
+        "name: test",
+        "```",
+        "",
+      ].join("\n"));
+
+      const repo = new FileRepository();
+      const preview = repo.readPreview(file);
+      const lines = repo.renderPreviewLines(file, preview);
+
+      expectSyntaxHighlighted(lines[1]);
+      expectSyntaxHighlighted(lines[4]);
+      expectSyntaxHighlighted(lines[7]);
+      expectSyntaxHighlighted(lines[10]);
+      expect(lines.every((line) => line.endsWith(FG_RESET))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -154,3 +257,14 @@ describe("FileRepository", () => {
     );
   });
 });
+
+function expectStyled(line: string | undefined, raw: string): void {
+  expect(line).toBeDefined();
+  expect(line).not.toBe(`${raw}${FG_RESET}`);
+  expect(line).toContain("\x1b[");
+}
+
+function expectSyntaxHighlighted(line: string | undefined): void {
+  expect(line).toBeDefined();
+  expect((line?.match(/\x1b\[[0-9;]*m/g) ?? []).length).toBeGreaterThanOrEqual(4);
+}
